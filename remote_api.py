@@ -20,7 +20,10 @@ class SolverConfig:
     gamma: float
     beta: float
     epsilon: float
-    delta_max: int = 20
+    delta_train: int = 20
+    delta_check: int = 10
+    boundary_model: Literal["tail", "legacy_overflow"] = "tail"
+    boundary_tx_mode: Literal["free", "force_transmit"] = "force_transmit"
     vi_tol: float = 1e-10
     rx_accept_tol: float = 1e-9
     api_tol: float = 1e-9
@@ -42,8 +45,20 @@ class SolverConfig:
             )
         if not 0.0 < self.epsilon <= 1.0 or not np.isfinite(self.epsilon):
             raise ValueError("epsilon must lie in (0, 1]")
-        if int(self.delta_max) != self.delta_max or self.delta_max < 0:
-            raise ValueError("delta_max must be a nonnegative integer")
+        if int(self.delta_train) != self.delta_train or self.delta_train < 1:
+            raise ValueError("delta_train must be a positive integer")
+        if int(self.delta_check) != self.delta_check or self.delta_check < 0:
+            raise ValueError("delta_check must be a nonnegative integer")
+        if self.delta_check >= self.delta_train:
+            raise ValueError("delta_check must be strictly smaller than delta_train")
+        if self.boundary_model not in ("tail", "legacy_overflow"):
+            raise ValueError(
+                "boundary_model must be 'tail' or 'legacy_overflow'"
+            )
+        if self.boundary_tx_mode not in ("free", "force_transmit"):
+            raise ValueError(
+                "boundary_tx_mode must be 'free' or 'force_transmit'"
+            )
         for name in (
             "vi_tol",
             "rx_accept_tol",
@@ -71,6 +86,20 @@ class SolverConfig:
         return -self.beta / (1.0 - self.gamma)
 
     @property
+    def delta_max(self) -> int:
+        """Deprecated read-only alias for code that reports the table size."""
+
+        return self.delta_train
+
+    @property
+    def effective_boundary_tx_mode(self) -> Literal["free", "force_transmit"]:
+        """Legacy overflow reproduces the old unconstrained boundary policy."""
+
+        if self.boundary_model == "legacy_overflow":
+            return "free"
+        return self.boundary_tx_mode
+
+    @property
     def theorem_margin(self) -> float:
         return self.beta - (
             self.gamma * self.epsilon * (1.0 - self.epsilon) / (1.0 - self.gamma)
@@ -92,6 +121,7 @@ class BellmanResult:
     iterations: int
     residual: float
     converged: bool
+    tail_values: np.ndarray | None = None
 
 
 @dataclass
@@ -127,12 +157,28 @@ class RxImprovementResult:
 @dataclass
 class RevealingResult:
     is_revealing: bool
-    violations: list[dict[str, int]]
-    deferred_boundary_layer_violations: list[dict[str, int]]
-    boundary_transmissions: list[dict[str, int]]
+    core_violations: list[dict[str, int | float]]
+    buffer_violations: list[dict[str, int | float]]
+    boundary_adjacent_violations: list[dict[str, int | float]]
+    boundary_transmissions: list[dict[str, int | float]]
     boundary_states: list[tuple[int, int, int]]
     reachable_states: list[tuple[int, int, int]]
+    reachable_tail_states: list[tuple[int, int]]
     statistics: dict[str, int | float]
+
+    @property
+    def violations(self) -> list[dict[str, int | float]]:
+        """Backward-compatible name for the theorem-checking violations."""
+
+        return self.core_violations
+
+    @property
+    def deferred_boundary_layer_violations(
+        self,
+    ) -> list[dict[str, int | float]]:
+        """Backward-compatible name for the former delta_max-1 category."""
+
+        return self.boundary_adjacent_violations
 
 
 @dataclass
@@ -223,6 +269,49 @@ def _iterate_operator(
     return BellmanResult(values, config.max_vi_iterations, residual, False)
 
 
+def _iterate_coupled_operator(
+    operator: Callable[[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]],
+    value_shape: tuple[int, ...],
+    tail_shape: tuple[int, ...],
+    config: SolverConfig,
+) -> BellmanResult:
+    """Iterate a discounted Bellman operator jointly over table and tail values."""
+
+    values = np.zeros(value_shape, dtype=float)
+    tail_values = np.zeros(tail_shape, dtype=float)
+    residual = np.inf
+    for iteration in range(1, config.max_vi_iterations + 1):
+        updated, updated_tail = operator(values, tail_values)
+        step_residual = max(
+            float(np.max(np.abs(updated - values))),
+            float(np.max(np.abs(updated_tail - tail_values))),
+        )
+        values = updated
+        tail_values = updated_tail
+        if step_residual <= config.vi_tol:
+            checked, checked_tail = operator(values, tail_values)
+            residual = max(
+                float(np.max(np.abs(checked - values))),
+                float(np.max(np.abs(checked_tail - tail_values))),
+            )
+            if residual <= config.vi_tol:
+                return BellmanResult(
+                    values, iteration, residual, True, tail_values
+                )
+    checked, checked_tail = operator(values, tail_values)
+    residual = max(
+        float(np.max(np.abs(checked - values))),
+        float(np.max(np.abs(checked_tail - tail_values))),
+    )
+    return BellmanResult(
+        values,
+        config.max_vi_iterations,
+        residual,
+        False,
+        tail_values,
+    )
+
+
 def _require_converged(result: BellmanResult, name: str) -> None:
     if not result.converged:
         raise ConvergenceError(
@@ -250,36 +339,53 @@ def evaluate_policy(
     if mode not in ("two_way", "lower_bound"):
         raise ValueError("mode must be 'two_way' or 'lower_bound'")
     n_states = mdp.n_states
-    delta_max = config.delta_max
-    tx = _validate_tx_policy(pi_tx, n_states, delta_max)
-    rx = _validate_rx_policy(pi_rx, n_states, mdp.n_actions, delta_max)
+    delta_train = config.delta_train
+    tx = _validate_tx_policy(pi_tx, n_states, delta_train)
+    rx = _validate_rx_policy(pi_rx, n_states, mdp.n_actions, delta_train)
     if mu0 is not None:
         validate_initial_distribution(mu0, n_states)
     expected_rewards = mdp.expected_rewards
-    overflow = config.overflow_value
 
-    def operator(values: np.ndarray) -> np.ndarray:
-        updated = np.empty_like(values)
-        for state in range(n_states):
-            for age in range(delta_max + 1):
-                for last_received in range(n_states):
-                    communication = int(tx[state, age, last_received])
-                    if age < delta_max:
-                        no_reception_action = int(rx[age + 1, last_received])
-                        no_reception = _branch_value(
-                            mdp,
-                            expected_rewards,
-                            config.gamma,
-                            no_reception_action,
-                            state,
-                            values[:, age + 1, last_received],
-                        )
+    if config.boundary_model == "legacy_overflow":
+        overflow = config.overflow_value
+
+        def legacy_operator(values: np.ndarray) -> np.ndarray:
+            updated = np.empty_like(values)
+            for state in range(n_states):
+                for age in range(delta_train + 1):
+                    for last_received in range(n_states):
+                        communication = int(tx[state, age, last_received])
+                        if age < delta_train:
+                            no_reception_action = int(
+                                rx[age + 1, last_received]
+                            )
+                            no_reception = _branch_value(
+                                mdp,
+                                expected_rewards,
+                                config.gamma,
+                                no_reception_action,
+                                state,
+                                values[:, age + 1, last_received],
+                            )
+                        else:
+                            no_reception_action = int(
+                                rx[delta_train, last_received]
+                            )
+                            no_reception = float(
+                                expected_rewards[no_reception_action, state]
+                                + config.gamma * overflow
+                            )
                         if communication == 0:
                             updated[state, age, last_received] = no_reception
                             continue
                         success_action = int(rx[0, state])
-                        if mode == "lower_bound" and success_action == no_reception_action:
-                            updated[state, age, last_received] = -config.beta + no_reception
+                        if (
+                            mode == "lower_bound"
+                            and success_action == no_reception_action
+                        ):
+                            updated[state, age, last_received] = (
+                                -config.beta + no_reception
+                            )
                             continue
                         success = _branch_value(
                             mdp,
@@ -294,18 +400,93 @@ def evaluate_policy(
                             + (1.0 - config.epsilon) * success
                             + config.epsilon * no_reception
                         )
-                    else:
-                        boundary_action = int(rx[delta_max, last_received])
-                        boundary = float(
-                            expected_rewards[boundary_action, state]
-                            + config.gamma * overflow
+            return updated
+
+        result = _iterate_operator(
+            legacy_operator,
+            (n_states, delta_train + 1, n_states),
+            config,
+        )
+    else:
+
+        def tail_operator(
+            values: np.ndarray, tail_values: np.ndarray
+        ) -> tuple[np.ndarray, np.ndarray]:
+            updated = np.empty_like(values)
+            updated_tail = np.empty_like(tail_values)
+
+            for state in range(n_states):
+                success_action = int(rx[0, state])
+                success = _branch_value(
+                    mdp,
+                    expected_rewards,
+                    config.gamma,
+                    success_action,
+                    state,
+                    values[:, 0, state],
+                )
+                for last_received in range(n_states):
+                    boundary_action = int(rx[delta_train, last_received])
+                    tail_failure = _branch_value(
+                        mdp,
+                        expected_rewards,
+                        config.gamma,
+                        boundary_action,
+                        state,
+                        tail_values[:, last_received],
+                    )
+                    if (
+                        mode == "lower_bound"
+                        and success_action == boundary_action
+                    ):
+                        updated_tail[state, last_received] = (
+                            -config.beta + tail_failure
                         )
+                    else:
+                        updated_tail[state, last_received] = (
+                            -config.beta
+                            + (1.0 - config.epsilon) * success
+                            + config.epsilon * tail_failure
+                        )
+
+                for age in range(delta_train + 1):
+                    for last_received in range(n_states):
+                        communication = int(tx[state, age, last_received])
+                        if age < delta_train:
+                            no_reception_action = int(
+                                rx[age + 1, last_received]
+                            )
+                            no_reception = _branch_value(
+                                mdp,
+                                expected_rewards,
+                                config.gamma,
+                                no_reception_action,
+                                state,
+                                values[:, age + 1, last_received],
+                            )
+                        else:
+                            no_reception_action = int(
+                                rx[delta_train, last_received]
+                            )
+                            no_reception = _branch_value(
+                                mdp,
+                                expected_rewards,
+                                config.gamma,
+                                no_reception_action,
+                                state,
+                                tail_values[:, last_received],
+                            )
                         if communication == 0:
-                            updated[state, age, last_received] = boundary
+                            updated[state, age, last_received] = no_reception
                             continue
                         success_action = int(rx[0, state])
-                        if mode == "lower_bound" and success_action == boundary_action:
-                            updated[state, age, last_received] = -config.beta + boundary
+                        if (
+                            mode == "lower_bound"
+                            and success_action == no_reception_action
+                        ):
+                            updated[state, age, last_received] = (
+                                -config.beta + no_reception
+                            )
                             continue
                         success = _branch_value(
                             mdp,
@@ -318,13 +499,16 @@ def evaluate_policy(
                         updated[state, age, last_received] = (
                             -config.beta
                             + (1.0 - config.epsilon) * success
-                            + config.epsilon * boundary
+                            + config.epsilon * no_reception
                         )
-        return updated
+            return updated, updated_tail
 
-    result = _iterate_operator(
-        operator, (n_states, delta_max + 1, n_states), config
-    )
+        result = _iterate_coupled_operator(
+            tail_operator,
+            (n_states, delta_train + 1, n_states),
+            (n_states, n_states),
+            config,
+        )
     _require_converged(result, f"{mode} policy evaluation")
     return result
 
@@ -338,69 +522,182 @@ def tx_best_response(
     """Compute the exact tabular Tx best response by value iteration."""
 
     n_states = mdp.n_states
-    delta_max = config.delta_max
-    rx = _validate_rx_policy(pi_rx, n_states, mdp.n_actions, delta_max)
+    delta_train = config.delta_train
+    rx = _validate_rx_policy(pi_rx, n_states, mdp.n_actions, delta_train)
     if previous_pi_tx is None:
-        previous = np.zeros((n_states, delta_max + 1, n_states), dtype=np.int64)
+        previous = np.zeros(
+            (n_states, delta_train + 1, n_states), dtype=np.int64
+        )
     else:
-        previous = _validate_tx_policy(previous_pi_tx, n_states, delta_max)
+        previous = _validate_tx_policy(previous_pi_tx, n_states, delta_train)
     expected_rewards = mdp.expected_rewards
-    overflow = config.overflow_value
 
-    def q_values(values: np.ndarray) -> np.ndarray:
-        q = np.empty((n_states, delta_max + 1, n_states, 2), dtype=float)
-        for state in range(n_states):
-            success_action = int(rx[0, state])
-            success = _branch_value(
-                mdp,
-                expected_rewards,
-                config.gamma,
-                success_action,
-                state,
-                values[:, 0, state],
+    if config.boundary_model == "legacy_overflow":
+        overflow = config.overflow_value
+
+        def legacy_q_values(values: np.ndarray) -> np.ndarray:
+            q = np.empty(
+                (n_states, delta_train + 1, n_states, 2), dtype=float
             )
-            for age in range(delta_max + 1):
+            for state in range(n_states):
+                success_action = int(rx[0, state])
+                success = _branch_value(
+                    mdp,
+                    expected_rewards,
+                    config.gamma,
+                    success_action,
+                    state,
+                    values[:, 0, state],
+                )
+                for age in range(delta_train + 1):
+                    for last_received in range(n_states):
+                        if age < delta_train:
+                            no_reception_action = int(
+                                rx[age + 1, last_received]
+                            )
+                            no_reception = _branch_value(
+                                mdp,
+                                expected_rewards,
+                                config.gamma,
+                                no_reception_action,
+                                state,
+                                values[:, age + 1, last_received],
+                            )
+                        else:
+                            boundary_action = int(
+                                rx[delta_train, last_received]
+                            )
+                            no_reception = float(
+                                expected_rewards[boundary_action, state]
+                                + config.gamma * overflow
+                            )
+                        q[state, age, last_received, 0] = no_reception
+                        q[state, age, last_received, 1] = (
+                            -config.beta
+                            + (1.0 - config.epsilon) * success
+                            + config.epsilon * no_reception
+                        )
+            return q
+
+        result = _iterate_operator(
+            lambda values: np.max(legacy_q_values(values), axis=3),
+            (n_states, delta_train + 1, n_states),
+            config,
+        )
+        final_q = legacy_q_values(result.values)
+    else:
+
+        def tail_q_values(
+            values: np.ndarray, tail_values: np.ndarray
+        ) -> np.ndarray:
+            q = np.empty(
+                (n_states, delta_train + 1, n_states, 2), dtype=float
+            )
+            for state in range(n_states):
+                success_action = int(rx[0, state])
+                success = _branch_value(
+                    mdp,
+                    expected_rewards,
+                    config.gamma,
+                    success_action,
+                    state,
+                    values[:, 0, state],
+                )
+                for age in range(delta_train + 1):
+                    for last_received in range(n_states):
+                        if age < delta_train:
+                            no_reception_action = int(
+                                rx[age + 1, last_received]
+                            )
+                            no_reception = _branch_value(
+                                mdp,
+                                expected_rewards,
+                                config.gamma,
+                                no_reception_action,
+                                state,
+                                values[:, age + 1, last_received],
+                            )
+                        else:
+                            boundary_action = int(
+                                rx[delta_train, last_received]
+                            )
+                            no_reception = _branch_value(
+                                mdp,
+                                expected_rewards,
+                                config.gamma,
+                                boundary_action,
+                                state,
+                                tail_values[:, last_received],
+                            )
+                        q[state, age, last_received, 0] = no_reception
+                        q[state, age, last_received, 1] = (
+                            -config.beta
+                            + (1.0 - config.epsilon) * success
+                            + config.epsilon * no_reception
+                        )
+            return q
+
+        def tail_operator(
+            values: np.ndarray, tail_values: np.ndarray
+        ) -> tuple[np.ndarray, np.ndarray]:
+            q = tail_q_values(values, tail_values)
+            updated = np.max(q, axis=3)
+            if config.effective_boundary_tx_mode == "force_transmit":
+                updated[:, delta_train, :] = q[:, delta_train, :, 1]
+
+            updated_tail = np.empty_like(tail_values)
+            for state in range(n_states):
+                success_action = int(rx[0, state])
+                success = _branch_value(
+                    mdp,
+                    expected_rewards,
+                    config.gamma,
+                    success_action,
+                    state,
+                    values[:, 0, state],
+                )
                 for last_received in range(n_states):
-                    if age < delta_max:
-                        no_reception_action = int(rx[age + 1, last_received])
-                        no_reception = _branch_value(
-                            mdp,
-                            expected_rewards,
-                            config.gamma,
-                            no_reception_action,
-                            state,
-                            values[:, age + 1, last_received],
-                        )
-                    else:
-                        boundary_action = int(rx[delta_max, last_received])
-                        no_reception = float(
-                            expected_rewards[boundary_action, state]
-                            + config.gamma * overflow
-                        )
-                    q[state, age, last_received, 0] = no_reception
-                    q[state, age, last_received, 1] = (
+                    boundary_action = int(rx[delta_train, last_received])
+                    failure = _branch_value(
+                        mdp,
+                        expected_rewards,
+                        config.gamma,
+                        boundary_action,
+                        state,
+                        tail_values[:, last_received],
+                    )
+                    updated_tail[state, last_received] = (
                         -config.beta
                         + (1.0 - config.epsilon) * success
-                        + config.epsilon * no_reception
+                        + config.epsilon * failure
                     )
-        return q
+            return updated, updated_tail
 
-    result = _iterate_operator(
-        lambda values: np.max(q_values(values), axis=3),
-        (n_states, delta_max + 1, n_states),
-        config,
-    )
+        result = _iterate_coupled_operator(
+            tail_operator,
+            (n_states, delta_train + 1, n_states),
+            (n_states, n_states),
+            config,
+        )
+        assert result.tail_values is not None
+        final_q = tail_q_values(result.values, result.tail_values)
+
     _require_converged(result, "Tx value iteration")
-    final_q = q_values(result.values)
     policy = np.empty_like(previous)
     for state in range(n_states):
-        for age in range(delta_max + 1):
+        for age in range(delta_train + 1):
             for last_received in range(n_states):
-                policy[state, age, last_received] = _stable_argmax(
-                    final_q[state, age, last_received],
-                    int(previous[state, age, last_received]),
-                    config.tie_tol,
-                )
+                if (
+                    age == delta_train
+                    and config.effective_boundary_tx_mode == "force_transmit"
+                ):
+                    policy[state, age, last_received] = 1
+                else:
+                    policy[state, age, last_received] = _stable_argmax(
+                        final_q[state, age, last_received],
+                        int(previous[state, age, last_received]),
+                        config.tie_tol,
+                    )
     return TxBestResponseResult(policy, result, final_q)
 
 
@@ -413,15 +710,15 @@ def compute_rx_beliefs(
     """Recompute Rx beliefs induced by the current deterministic policies."""
 
     n_states = mdp.n_states
-    delta_max = config.delta_max
-    tx = _validate_tx_policy(pi_tx, n_states, delta_max)
-    rx = _validate_rx_policy(pi_rx, n_states, mdp.n_actions, delta_max)
-    beliefs = np.zeros((delta_max + 1, n_states, n_states), dtype=float)
-    valid = np.zeros((delta_max + 1, n_states), dtype=bool)
+    delta_train = config.delta_train
+    tx = _validate_tx_policy(pi_tx, n_states, delta_train)
+    rx = _validate_rx_policy(pi_rx, n_states, mdp.n_actions, delta_train)
+    beliefs = np.zeros((delta_train + 1, n_states, n_states), dtype=float)
+    valid = np.zeros((delta_train + 1, n_states), dtype=bool)
     for last_received in range(n_states):
         beliefs[0, last_received, last_received] = 1.0
         valid[0, last_received] = True
-        for age in range(delta_max):
+        for age in range(delta_train):
             if not valid[age, last_received]:
                 break
             action = int(rx[age, last_received])
@@ -447,48 +744,50 @@ def rx_greedy_candidate(
     """Solve the aggregated Rx Bellman equation with beliefs held fixed."""
 
     n_states = mdp.n_states
-    delta_max = config.delta_max
-    tx = _validate_tx_policy(pi_tx, n_states, delta_max)
+    delta_train = config.delta_train
+    tx = _validate_tx_policy(pi_tx, n_states, delta_train)
     current = _validate_rx_policy(
-        current_pi_rx, n_states, mdp.n_actions, delta_max
+        current_pi_rx, n_states, mdp.n_actions, delta_train
     )
-    if belief_result.beliefs.shape != (delta_max + 1, n_states, n_states):
+    if belief_result.beliefs.shape != (delta_train + 1, n_states, n_states):
         raise ValueError("belief array has the wrong shape")
-    if belief_result.valid.shape != (delta_max + 1, n_states):
+    if belief_result.valid.shape != (delta_train + 1, n_states):
         raise ValueError("belief validity mask has the wrong shape")
     expected_rewards = mdp.expected_rewards
-    overflow = config.overflow_value
 
-    def q_values(values: np.ndarray) -> np.ndarray:
+    def base_q_values(
+        values: np.ndarray,
+        boundary_continuation: Callable[[int], np.ndarray],
+    ) -> np.ndarray:
         q = np.full(
-            (delta_max + 1, n_states, mdp.n_actions), -np.inf, dtype=float
+            (delta_train + 1, n_states, mdp.n_actions),
+            -np.inf,
+            dtype=float,
         )
-        for age in range(delta_max + 1):
+        for age in range(delta_train + 1):
             for last_received in range(n_states):
                 if not belief_result.valid[age, last_received]:
                     old_action = int(current[age, last_received])
-                    q[age, last_received, old_action] = values[age, last_received]
+                    q[age, last_received, old_action] = values[
+                        age, last_received
+                    ]
                     continue
                 belief = belief_result.beliefs[age, last_received]
-                if age < delta_max:
-                    no_reception_value = float(values[age + 1, last_received])
-                    communication = tx[:, age, last_received]
-                    continuation = np.where(
-                        communication == 1,
-                        -config.beta
-                        + (1.0 - config.epsilon) * values[0, :]
-                        + config.epsilon * no_reception_value,
-                        no_reception_value,
+                communication = tx[:, age, last_received]
+                if age < delta_train:
+                    no_reception = np.full(
+                        n_states,
+                        float(values[age + 1, last_received]),
                     )
                 else:
-                    communication = tx[:, delta_max, last_received]
-                    continuation = np.where(
-                        communication == 1,
-                        -config.beta
-                        + (1.0 - config.epsilon) * values[0, :]
-                        + config.epsilon * overflow,
-                        overflow,
-                    )
+                    no_reception = boundary_continuation(last_received)
+                continuation = np.where(
+                    communication == 1,
+                    -config.beta
+                    + (1.0 - config.epsilon) * values[0, :]
+                    + config.epsilon * no_reception,
+                    no_reception,
+                )
                 for action in range(mdp.n_actions):
                     state_values = expected_rewards[action] + config.gamma * (
                         mdp.P[action] @ continuation
@@ -498,15 +797,77 @@ def rx_greedy_candidate(
                     )
         return q
 
-    result = _iterate_operator(
-        lambda values: np.max(q_values(values), axis=2),
-        (delta_max + 1, n_states),
-        config,
-    )
+    if config.boundary_model == "legacy_overflow":
+        overflow = config.overflow_value
+
+        def legacy_q_values(values: np.ndarray) -> np.ndarray:
+            return base_q_values(
+                values,
+                lambda _last_received: np.full(n_states, overflow),
+            )
+
+        result = _iterate_operator(
+            lambda values: np.max(legacy_q_values(values), axis=2),
+            (delta_train + 1, n_states),
+            config,
+        )
+        final_q = legacy_q_values(result.values)
+    else:
+
+        def tail_q_values(
+            values: np.ndarray, tail_values: np.ndarray
+        ) -> np.ndarray:
+            return base_q_values(
+                values,
+                lambda last_received: tail_values[:, last_received],
+            )
+
+        def tail_operator(
+            values: np.ndarray, tail_values: np.ndarray
+        ) -> tuple[np.ndarray, np.ndarray]:
+            q = tail_q_values(values, tail_values)
+            updated = np.max(q, axis=2)
+            updated_tail = np.empty_like(tail_values)
+            for state in range(n_states):
+                success_action = int(current[0, state])
+                # Aggregated Rx indexing: successful transmission of current
+                # physical state `state` resets memory to (0, state).  The
+                # continuation is V_rx[0, state], never V_rx[0, next_state].
+                success = float(
+                    expected_rewards[success_action, state]
+                    + config.gamma * values[0, state]
+                )
+                for last_received in range(n_states):
+                    boundary_action = int(
+                        current[delta_train, last_received]
+                    )
+                    failure = _branch_value(
+                        mdp,
+                        expected_rewards,
+                        config.gamma,
+                        boundary_action,
+                        state,
+                        tail_values[:, last_received],
+                    )
+                    updated_tail[state, last_received] = (
+                        -config.beta
+                        + (1.0 - config.epsilon) * success
+                        + config.epsilon * failure
+                    )
+            return updated, updated_tail
+
+        result = _iterate_coupled_operator(
+            tail_operator,
+            (delta_train + 1, n_states),
+            (n_states, n_states),
+            config,
+        )
+        assert result.tail_values is not None
+        final_q = tail_q_values(result.values, result.tail_values)
+
     _require_converged(result, "fixed-belief Rx value iteration")
-    final_q = q_values(result.values)
     candidate = np.array(current, copy=True)
-    for age in range(delta_max + 1):
+    for age in range(delta_train + 1):
         for last_received in range(n_states):
             if belief_result.valid[age, last_received]:
                 candidate[age, last_received] = _stable_argmax(
@@ -530,10 +891,13 @@ def rx_restricted_best_response(
         distribution = initial_distribution(mdp.n_states)
     else:
         distribution = validate_initial_distribution(mu0, mdp.n_states)
-    tx = _validate_tx_policy(pi_tx, mdp.n_states, config.delta_max)
+    tx = _validate_tx_policy(pi_tx, mdp.n_states, config.delta_train)
     current = np.array(
         _validate_rx_policy(
-            initial_pi_rx, mdp.n_states, mdp.n_actions, config.delta_max
+            initial_pi_rx,
+            mdp.n_states,
+            mdp.n_actions,
+            config.delta_train,
         ),
         copy=True,
     )
@@ -651,14 +1015,16 @@ def initialize_policies(
     """Create deterministic initial policies."""
 
     rng = np.random.default_rng(seed)
-    tx_shape = (mdp.n_states, config.delta_max + 1, mdp.n_states)
-    rx_shape = (config.delta_max + 1, mdp.n_states)
+    tx_shape = (mdp.n_states, config.delta_train + 1, mdp.n_states)
+    rx_shape = (config.delta_train + 1, mdp.n_states)
     if tx_mode == "never":
         pi_tx = np.zeros(tx_shape, dtype=np.int64)
     elif tx_mode == "random":
         pi_tx = rng.integers(0, 2, size=tx_shape, dtype=np.int64)
     else:
         raise ValueError("tx_mode must be 'never' or 'random'")
+    if config.effective_boundary_tx_mode == "force_transmit":
+        pi_tx[:, config.delta_train, :] = 1
 
     if rx_mode == "fully_observed":
         state_policy, _ = fully_observed_mdp_policy(mdp, config)
@@ -670,6 +1036,137 @@ def initialize_policies(
     return pi_tx, pi_rx
 
 
+def _propagate_policy_mass(
+    mdp: FiniteMDP,
+    config: SolverConfig,
+    tx: np.ndarray,
+    rx: np.ndarray,
+    table_mass: np.ndarray,
+    tail_mass: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """Apply the transpose of the synchronized transition kernel to mass."""
+
+    n_states = mdp.n_states
+    delta_train = config.delta_train
+    next_table = np.zeros_like(table_mass)
+    next_tail = np.zeros_like(tail_mass)
+    table_exit_mass = 0.0
+
+    for state in range(n_states):
+        for age in range(delta_train + 1):
+            for last_received in range(n_states):
+                mass = float(table_mass[state, age, last_received])
+                if mass == 0.0:
+                    continue
+                communication = int(tx[state, age, last_received])
+                if age < delta_train:
+                    if communication == 0:
+                        action = int(rx[age + 1, last_received])
+                        next_table[:, age + 1, last_received] += (
+                            mass * mdp.P[action, state]
+                        )
+                    else:
+                        success_action = int(rx[0, state])
+                        next_table[:, 0, state] += (
+                            mass
+                            * (1.0 - config.epsilon)
+                            * mdp.P[success_action, state]
+                        )
+                        failure_action = int(rx[age + 1, last_received])
+                        next_table[:, age + 1, last_received] += (
+                            mass
+                            * config.epsilon
+                            * mdp.P[failure_action, state]
+                        )
+                    continue
+
+                boundary_action = int(rx[delta_train, last_received])
+                if communication == 1:
+                    success_action = int(rx[0, state])
+                    next_table[:, 0, state] += (
+                        mass
+                        * (1.0 - config.epsilon)
+                        * mdp.P[success_action, state]
+                    )
+                exit_probability = (
+                    1.0 if communication == 0 else config.epsilon
+                )
+                table_exit_mass += mass * exit_probability
+                if config.boundary_model == "tail":
+                    next_tail[:, last_received] += (
+                        mass
+                        * exit_probability
+                        * mdp.P[boundary_action, state]
+                    )
+
+    if config.boundary_model == "tail":
+        for state in range(n_states):
+            success_action = int(rx[0, state])
+            for last_received in range(n_states):
+                mass = float(tail_mass[state, last_received])
+                if mass == 0.0:
+                    continue
+                next_table[:, 0, state] += (
+                    mass
+                    * (1.0 - config.epsilon)
+                    * mdp.P[success_action, state]
+                )
+                boundary_action = int(rx[delta_train, last_received])
+                next_tail[:, last_received] += (
+                    mass
+                    * config.epsilon
+                    * mdp.P[boundary_action, state]
+                )
+    return next_table, next_tail, table_exit_mass
+
+
+def _discounted_policy_occupancy(
+    mdp: FiniteMDP,
+    config: SolverConfig,
+    tx: np.ndarray,
+    rx: np.ndarray,
+    distribution: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, float, int, float]:
+    """Compute discounted table and tail occupancy without a dense matrix."""
+
+    n_states = mdp.n_states
+    initial_table = np.zeros(
+        (n_states, config.delta_train + 1, n_states), dtype=float
+    )
+    states = np.arange(n_states)
+    initial_table[states, 0, states] = distribution
+    initial_tail = np.zeros((n_states, n_states), dtype=float)
+    table = np.zeros_like(initial_table)
+    tail = np.zeros_like(initial_tail)
+    residual = np.inf
+
+    for iteration in range(1, config.max_vi_iterations + 1):
+        propagated_table, propagated_tail, _ = _propagate_policy_mass(
+            mdp, config, tx, rx, table, tail
+        )
+        updated_table = initial_table + config.gamma * propagated_table
+        updated_tail = initial_tail + config.gamma * propagated_tail
+        residual = max(
+            float(np.max(np.abs(updated_table - table))),
+            float(np.max(np.abs(updated_tail - tail))),
+        )
+        table = updated_table
+        tail = updated_tail
+        if residual <= config.vi_tol:
+            break
+    else:
+        raise ConvergenceError(
+            "discounted occupancy did not converge after "
+            f"{config.max_vi_iterations} iterations; residual={residual:.3e}"
+        )
+
+    _, _, table_exit_mass = _propagate_policy_mass(
+        mdp, config, tx, rx, table, tail
+    )
+    discounted_entry_flow = config.gamma * table_exit_mass
+    return table, tail, discounted_entry_flow, iteration, residual
+
+
 def check_revealing(
     mdp: FiniteMDP,
     config: SolverConfig,
@@ -677,13 +1174,14 @@ def check_revealing(
     pi_rx: np.ndarray,
     mu0: np.ndarray | None = None,
     all_states: bool = False,
+    compute_occupancy: bool = True,
 ) -> RevealingResult:
-    """Check revealing only on augmented states reachable in the two-way model."""
+    """Classify revealing violations on reachable finite-table states."""
 
     n_states = mdp.n_states
-    delta_max = config.delta_max
-    tx = _validate_tx_policy(pi_tx, n_states, delta_max)
-    rx = _validate_rx_policy(pi_rx, n_states, mdp.n_actions, delta_max)
+    delta_train = config.delta_train
+    tx = _validate_tx_policy(pi_tx, n_states, delta_train)
+    rx = _validate_rx_policy(pi_rx, n_states, mdp.n_actions, delta_train)
     distribution = (
         initial_distribution(n_states)
         if mu0 is None
@@ -694,18 +1192,29 @@ def check_revealing(
         reachable = {
             (state, age, last_received)
             for state in range(n_states)
-            for age in range(delta_max + 1)
+            for age in range(delta_train + 1)
             for last_received in range(n_states)
         }
+        reachable_tail = (
+            {
+                (state, last_received)
+                for state in range(n_states)
+                for last_received in range(n_states)
+            }
+            if config.boundary_model == "tail"
+            else set()
+        )
     else:
-        queue = deque(
+        table_queue = deque(
             (state, 0, state)
             for state in range(n_states)
             if distribution[state] > 0.0
         )
-        reachable: set[tuple[int, int, int]] = set(queue)
+        tail_queue: deque[tuple[int, int]] = deque()
+        reachable: set[tuple[int, int, int]] = set(table_queue)
+        reachable_tail: set[tuple[int, int]] = set()
 
-        def enqueue_physical_successors(
+        def enqueue_table_successors(
             state: int, action: int, next_age: int, next_last_received: int
         ) -> None:
             for next_state, probability in enumerate(mdp.P[action, state]):
@@ -713,39 +1222,94 @@ def check_revealing(
                     target = (next_state, next_age, next_last_received)
                     if target not in reachable:
                         reachable.add(target)
-                        queue.append(target)
+                        table_queue.append(target)
 
-        while queue:
-            state, age, last_received = queue.popleft()
-            communication = int(tx[state, age, last_received])
-            if age == delta_max:
+        def enqueue_tail_successors(
+            state: int, action: int, next_last_received: int
+        ) -> None:
+            for next_state, probability in enumerate(mdp.P[action, state]):
+                if probability > 0.0:
+                    target = (next_state, next_last_received)
+                    if target not in reachable_tail:
+                        reachable_tail.add(target)
+                        tail_queue.append(target)
+
+        while table_queue or tail_queue:
+            while table_queue:
+                state, age, last_received = table_queue.popleft()
+                communication = int(tx[state, age, last_received])
+                if age < delta_train:
+                    if communication == 0:
+                        action = int(rx[age + 1, last_received])
+                        enqueue_table_successors(
+                            state, action, age + 1, last_received
+                        )
+                    else:
+                        if (1.0 - config.epsilon) > 0.0:
+                            success_action = int(rx[0, state])
+                            enqueue_table_successors(
+                                state, success_action, 0, state
+                            )
+                        if config.epsilon > 0.0:
+                            failure_action = int(rx[age + 1, last_received])
+                            enqueue_table_successors(
+                                state,
+                                failure_action,
+                                age + 1,
+                                last_received,
+                            )
+                    continue
+
                 if communication == 1 and (1.0 - config.epsilon) > 0.0:
                     success_action = int(rx[0, state])
-                    enqueue_physical_successors(state, success_action, 0, state)
-                # No reception at the boundary terminates at overflow.
-                continue
-            if communication == 0:
-                action = int(rx[age + 1, last_received])
-                enqueue_physical_successors(
-                    state, action, age + 1, last_received
-                )
-                continue
-            if (1.0 - config.epsilon) > 0.0:
-                success_action = int(rx[0, state])
-                enqueue_physical_successors(state, success_action, 0, state)
-            if config.epsilon > 0.0:
-                failure_action = int(rx[age + 1, last_received])
-                enqueue_physical_successors(
-                    state, failure_action, age + 1, last_received
-                )
+                    enqueue_table_successors(state, success_action, 0, state)
+                if config.boundary_model == "tail" and (
+                    communication == 0 or config.epsilon > 0.0
+                ):
+                    boundary_action = int(rx[delta_train, last_received])
+                    enqueue_tail_successors(
+                        state, boundary_action, last_received
+                    )
 
-    violations: list[dict[str, int]] = []
-    deferred_boundary_layer_violations: list[dict[str, int]] = []
-    boundary_transmissions: list[dict[str, int]] = []
+            while tail_queue:
+                state, last_received = tail_queue.popleft()
+                if (1.0 - config.epsilon) > 0.0:
+                    success_action = int(rx[0, state])
+                    enqueue_table_successors(state, success_action, 0, state)
+                if config.epsilon > 0.0:
+                    boundary_action = int(rx[delta_train, last_received])
+                    enqueue_tail_successors(
+                        state, boundary_action, last_received
+                    )
+
+    if compute_occupancy:
+        (
+            table_occupancy,
+            tail_occupancy,
+            discounted_entry_flow,
+            occupancy_iterations,
+            occupancy_residual,
+        ) = _discounted_policy_occupancy(
+            mdp, config, tx, rx, distribution
+        )
+    else:
+        table_occupancy = np.zeros(
+            (n_states, delta_train + 1, n_states), dtype=float
+        )
+        tail_occupancy = np.zeros((n_states, n_states), dtype=float)
+        discounted_entry_flow = 0.0
+        occupancy_iterations = 0
+        occupancy_residual = 0.0
+
+    core_violations: list[dict[str, int | float]] = []
+    buffer_violations: list[dict[str, int | float]] = []
+    boundary_adjacent_violations: list[dict[str, int | float]] = []
+    boundary_transmissions: list[dict[str, int | float]] = []
     boundary_states: list[tuple[int, int, int]] = []
     for state, age, last_received in sorted(reachable):
         communication = int(tx[state, age, last_received])
-        if age == delta_max:
+        occupancy = float(table_occupancy[state, age, last_received])
+        if age == delta_train:
             boundary_states.append((state, age, last_received))
             if communication == 1:
                 boundary_transmissions.append(
@@ -755,43 +1319,75 @@ def check_revealing(
                         "last_received": last_received,
                         "tx_action": communication,
                         "success_action": int(rx[0, state]),
-                        "boundary_action": int(rx[delta_max, last_received]),
+                        "boundary_action": int(
+                            rx[delta_train, last_received]
+                        ),
+                        "discounted_occupancy": occupancy,
                     }
                 )
             continue
-        if communication == 1:
-            success_action = int(rx[0, state])
-            no_reception_action = int(rx[age + 1, last_received])
-            if success_action == no_reception_action:
-                record = {
-                    "state": state,
-                    "age": age,
-                    "last_received": last_received,
-                    "tx_action": communication,
-                    "success_action": success_action,
-                    "no_reception_action": no_reception_action,
-                }
-                if age == delta_max - 1:
-                    deferred_boundary_layer_violations.append(record)
-                else:
-                    violations.append(record)
+        if communication != 1:
+            continue
+        success_action = int(rx[0, state])
+        no_reception_action = int(rx[age + 1, last_received])
+        if success_action != no_reception_action:
+            continue
+        record: dict[str, int | float] = {
+            "state": state,
+            "age": age,
+            "last_received": last_received,
+            "tx_action": communication,
+            "success_action": success_action,
+            "no_reception_action": no_reception_action,
+            "distance_to_boundary": delta_train - age,
+            "discounted_occupancy": occupancy,
+        }
+        if age <= config.delta_check:
+            core_violations.append(record)
+        elif age == delta_train - 1:
+            boundary_adjacent_violations.append(record)
+        else:
+            buffer_violations.append(record)
 
-    total_states = n_states * n_states * (delta_max + 1)
+    total_states = n_states * n_states * (delta_train + 1)
     statistics: dict[str, int | float] = {
         "reachable_count": len(reachable),
         "reachable_interior_count": len(reachable) - len(boundary_states),
         "reachable_boundary_count": len(boundary_states),
+        "reachable_tail_count": len(reachable_tail),
         "total_tabular_states": total_states,
+        "total_tail_states": n_states * n_states,
         "reachable_fraction": len(reachable) / total_states,
         "initial_support_size": int(np.count_nonzero(distribution > 0.0)),
+        "core_violation_count": len(core_violations),
+        "buffer_violation_count": len(buffer_violations),
+        "boundary_adjacent_violation_count": len(
+            boundary_adjacent_violations
+        ),
+        "discounted_table_occupancy": float(np.sum(table_occupancy)),
+        "discounted_tail_occupancy": float(np.sum(tail_occupancy)),
+        "discounted_tail_entry_flow": (
+            discounted_entry_flow
+            if config.boundary_model == "tail"
+            else 0.0
+        ),
+        "discounted_legacy_overflow_entry_flow": (
+            discounted_entry_flow
+            if config.boundary_model == "legacy_overflow"
+            else 0.0
+        ),
+        "occupancy_iterations": occupancy_iterations,
+        "occupancy_residual": occupancy_residual,
     }
     return RevealingResult(
-        is_revealing=not violations,
-        violations=violations,
-        deferred_boundary_layer_violations=deferred_boundary_layer_violations,
+        is_revealing=not core_violations,
+        core_violations=core_violations,
+        buffer_violations=buffer_violations,
+        boundary_adjacent_violations=boundary_adjacent_violations,
         boundary_transmissions=boundary_transmissions,
         boundary_states=boundary_states,
         reachable_states=sorted(reachable),
+        reachable_tail_states=sorted(reachable_tail),
         statistics=statistics,
     )
 
@@ -819,26 +1415,44 @@ def run_api(
         if initial_pi_rx is None:
             initial_pi_rx = default_rx
     tx = np.array(
-        _validate_tx_policy(initial_pi_tx, mdp.n_states, config.delta_max),
+        _validate_tx_policy(initial_pi_tx, mdp.n_states, config.delta_train),
         copy=True,
     )
     rx = np.array(
         _validate_rx_policy(
-            initial_pi_rx, mdp.n_states, mdp.n_actions, config.delta_max
+            initial_pi_rx,
+            mdp.n_states,
+            mdp.n_actions,
+            config.delta_train,
         ),
         copy=True,
     )
+    if (
+        config.effective_boundary_tx_mode == "force_transmit"
+        and np.any(tx[:, config.delta_train, :] != 1)
+    ):
+        raise ValueError(
+            "initial_pi_tx must transmit at delta_train when "
+            "boundary_tx_mode='force_transmit'"
+        )
     logged_initial_tx = np.array(tx, copy=True)
     logged_initial_rx = np.array(rx, copy=True)
     current_evaluation = evaluate_policy(mdp, config, tx, rx, distribution)
     current_objective = objective_from_values(current_evaluation.values, distribution)
     initial_objective = current_objective
     history: list[dict[str, object]] = []
-    initial_revealing = check_revealing(mdp, config, tx, rx, distribution)
+    initial_revealing = check_revealing(
+        mdp, config, tx, rx, distribution, compute_occupancy=False
+    )
     violation_history: list[dict[str, object]] = [
         {
             "api_iteration": 0,
             "revealing_violation_count": len(initial_revealing.violations),
+            "core_violation_count": len(initial_revealing.core_violations),
+            "buffer_violation_count": len(initial_revealing.buffer_violations),
+            "boundary_adjacent_violation_count": len(
+                initial_revealing.boundary_adjacent_violations
+            ),
             "deferred_boundary_layer_violation_count": len(
                 initial_revealing.deferred_boundary_layer_violations
             ),
@@ -862,7 +1476,12 @@ def run_api(
         new_evaluation = evaluate_policy(mdp, config, tx, rx, distribution)
         new_objective = objective_from_values(new_evaluation.values, distribution)
         iteration_revealing = check_revealing(
-            mdp, config, tx, rx, distribution
+            mdp,
+            config,
+            tx,
+            rx,
+            distribution,
+            compute_occupancy=False,
         )
         tx_changed = not np.array_equal(tx, old_tx)
         rx_changed = not np.array_equal(rx, old_rx)
@@ -882,6 +1501,15 @@ def run_api(
                 "revealing_violation_count": len(
                     iteration_revealing.violations
                 ),
+                "core_violation_count": len(
+                    iteration_revealing.core_violations
+                ),
+                "buffer_violation_count": len(
+                    iteration_revealing.buffer_violations
+                ),
+                "boundary_adjacent_violation_count": len(
+                    iteration_revealing.boundary_adjacent_violations
+                ),
                 "deferred_boundary_layer_violation_count": len(
                     iteration_revealing.deferred_boundary_layer_violations
                 ),
@@ -895,6 +1523,15 @@ def run_api(
                 "api_iteration": api_iteration,
                 "revealing_violation_count": len(
                     iteration_revealing.violations
+                ),
+                "core_violation_count": len(
+                    iteration_revealing.core_violations
+                ),
+                "buffer_violation_count": len(
+                    iteration_revealing.buffer_violations
+                ),
+                "boundary_adjacent_violation_count": len(
+                    iteration_revealing.boundary_adjacent_violations
                 ),
                 "deferred_boundary_layer_violation_count": len(
                     iteration_revealing.deferred_boundary_layer_violations
@@ -947,8 +1584,17 @@ def run_api(
         "gamma": config.gamma,
         "beta": config.beta,
         "epsilon": config.epsilon,
-        "delta_max": config.delta_max,
-        "v_overflow": config.overflow_value,
+        "delta_train": config.delta_train,
+        "delta_check": config.delta_check,
+        "delta_max": config.delta_train,
+        "boundary_model": config.boundary_model,
+        "boundary_tx_mode": config.boundary_tx_mode,
+        "effective_boundary_tx_mode": config.effective_boundary_tx_mode,
+        "v_overflow": (
+            config.overflow_value
+            if config.boundary_model == "legacy_overflow"
+            else None
+        ),
         "mu0": distribution.tolist(),
         "seed": seed,
         "initial_pi_tx": logged_initial_tx.tolist(),
@@ -969,6 +1615,16 @@ def run_api(
         "revealing": revealing.is_revealing,
         "revealing_violation_count": len(revealing.violations),
         "revealing_violations": revealing.violations,
+        "core_violation_count": len(revealing.core_violations),
+        "core_violations": revealing.core_violations,
+        "buffer_violation_count": len(revealing.buffer_violations),
+        "buffer_violations": revealing.buffer_violations,
+        "boundary_adjacent_violation_count": len(
+            revealing.boundary_adjacent_violations
+        ),
+        "boundary_adjacent_violations": (
+            revealing.boundary_adjacent_violations
+        ),
         "deferred_boundary_layer_violation_count": len(
             revealing.deferred_boundary_layer_violations
         ),

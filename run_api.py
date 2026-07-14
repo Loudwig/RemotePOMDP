@@ -19,7 +19,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gamma", type=float, default=0.9)
     parser.add_argument("--beta", type=float, default=0.1)
     parser.add_argument("--epsilon", type=float, default=0.1)
-    parser.add_argument("--delta-max", type=int, default=20)
+    parser.add_argument(
+        "--delta-train",
+        "--delta-max",
+        dest="delta_train",
+        type=int,
+        default=20,
+        help="Maximum age represented in Bellman tables.",
+    )
+    parser.add_argument(
+        "--delta-check",
+        type=int,
+        default=10,
+        help="Largest age included in the core revealing check.",
+    )
+    parser.add_argument(
+        "--boundary-model",
+        choices=("tail", "legacy_overflow"),
+        default="tail",
+    )
+    parser.add_argument(
+        "--boundary-tx-mode",
+        choices=("free", "force_transmit"),
+        default="force_transmit",
+    )
     parser.add_argument(
         "--initial-state",
         type=int,
@@ -52,7 +75,10 @@ def main() -> None:
         gamma=args.gamma,
         beta=args.beta,
         epsilon=args.epsilon,
-        delta_max=args.delta_max,
+        delta_train=args.delta_train,
+        delta_check=args.delta_check,
+        boundary_model=args.boundary_model,
+        boundary_tx_mode=args.boundary_tx_mode,
         vi_tol=args.vi_tol,
         rx_accept_tol=args.rx_accept_tol,
         api_tol=args.api_tol,
