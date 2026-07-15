@@ -67,7 +67,8 @@ DEFAULT_SLURM: dict[str, Any] = {
     "cpus_per_task": 1,
     "mem": "4G",
     "max_concurrent": 16,
-    "python_module": "python/3.11",
+    "array_chunk_size": 1000,
+    "python_module": None,
     "extra_sbatch_args": [],
 }
 
@@ -215,7 +216,7 @@ def normalize_slurm(raw: Any) -> dict[str, Any]:
     if unknown:
         raise ExperimentSpecError(f"unknown Slurm option(s): {sorted(unknown)}")
     slurm = {**DEFAULT_SLURM, **raw}
-    for name in ("cpus_per_task", "max_concurrent"):
+    for name in ("cpus_per_task", "max_concurrent", "array_chunk_size"):
         if isinstance(slurm[name], bool) or not isinstance(slurm[name], int) or slurm[name] < 1:
             raise ExperimentSpecError(f"slurm.{name} must be a positive integer")
     for name in ("partition", "time", "mem"):
@@ -947,8 +948,15 @@ def write_slurm_scripts(manifest_path: Path) -> tuple[Path, Path]:
 #SBATCH --error={logs_dir}/%A_%a.err
 
 set -euo pipefail
+index_file="${{1:?missing array index file}}"
+index_line=$((SLURM_ARRAY_TASK_ID + 1))
+experiment_index="$(sed -n "${{index_line}}p" "$index_file")"
+if [[ -z "$experiment_index" ]]; then
+    echo "No manifest index mapped for Slurm task $SLURM_ARRAY_TASK_ID" >&2
+    exit 2
+fi
 {module_setup}{common_environment}cd {shlex.quote(str(PROJECT_ROOT))}
-{shlex.quote(str(python_executable))} {shlex.quote(str(runner))} run-one {shlex.quote(str(manifest_path))}
+{shlex.quote(str(python_executable))} {shlex.quote(str(runner))} run-one {shlex.quote(str(manifest_path))} --index "$experiment_index"
 """
     atomic_write_text(array_script, array_content, mode=0o755)
 
@@ -981,6 +989,61 @@ def run_command(command: list[str]) -> str:
     return completed.stdout.strip()
 
 
+def prepare_array_chunks(
+    manifest: dict[str, Any], pending: list[int]
+) -> list[dict[str, Any]]:
+    """Write stable local-task-to-manifest-index mappings for Slurm chunks."""
+    chunk_size = manifest["slurm"]["array_chunk_size"]
+    submission_dir = (
+        Path(manifest["output_dir"])
+        / "submissions"
+        / f"{time.time_ns()}_{digest(pending)}"
+    )
+    chunks: list[dict[str, Any]] = []
+    for chunk_number, start in enumerate(range(0, len(pending), chunk_size)):
+        indices = pending[start : start + chunk_size]
+        index_file = submission_dir / f"indices_{chunk_number:04d}.txt"
+        atomic_write_text(index_file, "".join(f"{index}\n" for index in indices))
+        chunks.append(
+            {
+                "chunk": chunk_number,
+                "indices": indices,
+                "index_file": str(index_file),
+            }
+        )
+    return chunks
+
+
+def build_array_command(
+    array_script: Path,
+    extra_sbatch_args: list[str],
+    chunk: dict[str, Any],
+    max_concurrent: int,
+    dependency: str | None = None,
+) -> list[str]:
+    command = ["sbatch", "--parsable", *extra_sbatch_args]
+    if dependency is not None:
+        command.append(f"--dependency=afterany:{dependency}")
+    command.extend(
+        [
+            f"--array=0-{len(chunk['indices']) - 1}%{max_concurrent}",
+            str(array_script),
+            chunk["index_file"],
+        ]
+    )
+    return command
+
+
+def chunk_summary(chunk: dict[str, Any], command: list[str]) -> dict[str, Any]:
+    return {
+        "chunk": chunk["chunk"],
+        "pending_count": len(chunk["indices"]),
+        "pending_selector": compress_indices(chunk["indices"]),
+        "index_file": chunk["index_file"],
+        "command": shlex.join(command),
+    }
+
+
 def submit_experiment(
     spec_path: Path, output_dir: Path | None = None, dry_run: bool = False
 ) -> dict[str, Any]:
@@ -996,33 +1059,55 @@ def submit_experiment(
             "message": "all points were already successful; results were merged",
         }
 
-    selector = compress_indices(pending)
-    selector = f"{selector}%{manifest['slurm']['max_concurrent']}"
     extra = manifest["slurm"]["extra_sbatch_args"]
-    array_command = [
-        "sbatch",
-        "--parsable",
-        *extra,
-        f"--array={selector}",
-        str(array_script),
-    ]
+    max_concurrent = manifest["slurm"]["max_concurrent"]
+    chunks = prepare_array_chunks(manifest, pending)
     if dry_run:
-        return {
+        chunk_details = []
+        for position, chunk in enumerate(chunks):
+            dependency = None if position == 0 else f"<ARRAY_JOB_ID_{position - 1}>"
+            command = build_array_command(
+                array_script, extra, chunk, max_concurrent, dependency
+            )
+            chunk_details.append(chunk_summary(chunk, command))
+        payload = {
             "manifest": str(manifest_path),
             "pending": pending,
-            "array_command": shlex.join(array_command),
+            "array_chunk_count": len(chunks),
+            "array_chunks": chunk_details,
             "merge_command_template": shlex.join(
-                ["sbatch", "--parsable", *extra, "--dependency=afterany:<ARRAY_JOB_ID>", str(merge_script)]
+                [
+                    "sbatch",
+                    "--parsable",
+                    *extra,
+                    f"--dependency=afterany:<ARRAY_JOB_ID_{len(chunks) - 1}>",
+                    str(merge_script),
+                ]
             ),
         }
+        if len(chunk_details) == 1:
+            payload["array_command"] = chunk_details[0]["command"]
+        return payload
 
-    array_output = run_command(array_command)
-    array_job_id = array_output.split(";", 1)[0]
+    array_jobs = []
+    previous_job_id: str | None = None
+    for chunk in chunks:
+        array_command = build_array_command(
+            array_script, extra, chunk, max_concurrent, previous_job_id
+        )
+        array_output = run_command(array_command)
+        array_job_id = array_output.split(";", 1)[0]
+        job = chunk_summary(chunk, array_command)
+        job["job_id"] = array_job_id
+        array_jobs.append(job)
+        previous_job_id = array_job_id
+
+    assert previous_job_id is not None
     merge_command = [
         "sbatch",
         "--parsable",
         *extra,
-        f"--dependency=afterany:{array_job_id}",
+        f"--dependency=afterany:{previous_job_id}",
         str(merge_script),
     ]
     merge_output = run_command(merge_command)
@@ -1031,13 +1116,28 @@ def submit_experiment(
         "submitted_at": utc_now(),
         "manifest": str(manifest_path),
         "pending_indices": pending,
-        "array_job_id": array_job_id,
+        "array_chunk_count": len(chunks),
+        "array_jobs": array_jobs,
         "merge_job_id": merge_job_id,
-        "array_command": shlex.join(array_command),
         "merge_command": shlex.join(merge_command),
     }
+    if len(array_jobs) == 1:
+        submission["array_job_id"] = array_jobs[0]["job_id"]
+        submission["array_command"] = array_jobs[0]["command"]
     atomic_write_json(Path(manifest["output_dir"]) / "submission.json", submission)
     return submission
+
+
+def submission_for_display(submission: dict[str, Any]) -> dict[str, Any]:
+    """Compact large pending-index lists for human-readable CLI output."""
+    display = dict(submission)
+    for key in ("pending", "pending_indices"):
+        values = display.pop(key, None)
+        if values is not None:
+            display["pending_count"] = len(values)
+            display["pending_selector"] = compress_indices(values)
+            break
+    return display
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1108,7 +1208,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "submit":
             submission = submit_experiment(args.spec, args.output_dir, args.dry_run)
-            print(json.dumps(submission, indent=2))
+            print(json.dumps(submission_for_display(submission), indent=2))
             return 0
     except (ExperimentSpecError, OSError, json.JSONDecodeError, subprocess.CalledProcessError) as exc:
         print(f"error: {exc}", file=sys.stderr)

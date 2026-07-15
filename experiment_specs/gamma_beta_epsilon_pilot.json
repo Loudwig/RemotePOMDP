@@ -1,0 +1,41 @@
+{
+  "name": "gamma_beta_epsilon_pilot_d100_d90",
+  "description": "Ten representative runs covering corners and the center of the full gamma/beta/epsilon sweep, with two MDP seeds.",
+  "result_detail": "compact",
+  "base": {
+    "n_states": 10,
+    "n_actions": 2,
+    "density": 0.5,
+    "reward_decay": 10.0,
+    "init_seed": 1234,
+    "initial_state": null,
+    "tx_init": "always",
+    "rx_init": "random",
+    "delta_train": 100,
+    "delta_check": 90,
+    "boundary_model": "tail",
+    "boundary_tx_mode": "force_transmit",
+    "compute_lower_bound": false
+  },
+  "points": [
+    {"gamma": 0.8, "beta": 0.0, "epsilon": 0.03, "mdp_seed": 0},
+    {"gamma": 0.8, "beta": 0.0, "epsilon": 0.03, "mdp_seed": 9},
+    {"gamma": 0.8, "beta": 2.0, "epsilon": 0.3, "mdp_seed": 0},
+    {"gamma": 0.8, "beta": 2.0, "epsilon": 0.3, "mdp_seed": 9},
+    {"gamma": 0.99, "beta": 0.0, "epsilon": 0.3, "mdp_seed": 0},
+    {"gamma": 0.99, "beta": 0.0, "epsilon": 0.3, "mdp_seed": 9},
+    {"gamma": 0.99, "beta": 2.0, "epsilon": 0.03, "mdp_seed": 0},
+    {"gamma": 0.99, "beta": 2.0, "epsilon": 0.03, "mdp_seed": 9},
+    {"gamma": 0.9, "beta": 1.111111, "epsilon": 0.15, "mdp_seed": 0},
+    {"gamma": 0.9, "beta": 1.111111, "epsilon": 0.15, "mdp_seed": 9}
+  ],
+  "slurm": {
+    "partition": "CPU",
+    "time": "04:00:00",
+    "cpus_per_task": 1,
+    "mem": "4G",
+    "max_concurrent": 10,
+    "python_module": null,
+    "extra_sbatch_args": []
+  }
+}

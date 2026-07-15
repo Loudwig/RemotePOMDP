@@ -15,13 +15,11 @@ Copy and edit `experiment_specs/example_grid.json`, giving every experiment a
 new `name`. On the cluster, from the repository root:
 
 ```bash
-module load python/3.11
-
 # Validate, count the points, and inspect the generated sbatch command.
-python experiment_runner.py submit experiment_specs/example_grid.json --dry-run
+/usr/bin/python3 experiment_runner.py submit experiment_specs/example_grid.json --dry-run
 
 # Submit the array and its dependent merge job.
-python experiment_runner.py submit experiment_specs/example_grid.json
+/usr/bin/python3 experiment_runner.py submit experiment_specs/example_grid.json
 ```
 
 For a first end-to-end check, use the dedicated four-point smoke test. It is
@@ -29,10 +27,10 @@ small enough to finish quickly and uses two concurrent Slurm array tasks:
 
 ```bash
 # Prepare and validate everything without submitting a job.
-python experiment_runner.py submit experiment_specs/smoke_test.json --dry-run
+/usr/bin/python3 experiment_runner.py submit experiment_specs/smoke_test.json --dry-run
 
 # Submit only after the dry-run output looks correct.
-python experiment_runner.py submit experiment_specs/smoke_test.json
+/usr/bin/python3 experiment_runner.py submit experiment_specs/smoke_test.json
 ```
 
 The command prints the array and merge job IDs. Monitor them with:
@@ -51,6 +49,7 @@ experiment_runs/<experiment-name>/
 ├── submission.json
 ├── run_array.sbatch
 ├── merge_results.sbatch
+├── submissions/          # immutable task-index mappings for array chunks
 ├── logs/
 ├── runs/                 # one JSON shard per point
 └── results.json          # single merged file
@@ -59,8 +58,8 @@ experiment_runs/<experiment-name>/
 Check progress or rebuild a partial/final merged file at any time:
 
 ```bash
-python experiment_runner.py status experiment_runs/<experiment-name>/manifest.json
-python experiment_runner.py merge experiment_runs/<experiment-name>/manifest.json
+/usr/bin/python3 experiment_runner.py status experiment_runs/<experiment-name>/manifest.json
+/usr/bin/python3 experiment_runner.py merge experiment_runs/<experiment-name>/manifest.json
 ```
 
 To retry missing or failed points, run the same submit command again. Already
@@ -132,6 +131,17 @@ The Slurm defaults target the `CPU` partition because the current tabular
 solver does not use CUDA. `max_concurrent` limits how many points the scheduler
 may run simultaneously. Slurm remains free to place multiple points on the
 same compute node when resources permit.
+
+The runner uses the exact Python executable used for submission. On the LTCI
+cluster, invoke it with `/usr/bin/python3`; `/usr/bin/python` is not present on
+all compute nodes. The system Python already provides NumPy. A software module
+can still be requested with `slurm.python_module`, but the default is `null`.
+
+Because the cluster has `MaxArraySize=1001`, `array_chunk_size` defaults to
+1000. Larger experiments are transparently split into chained arrays with
+local task IDs `0-999`. Each task reads a generated mapping file to find its
+global manifest index. Chunks run sequentially so `max_concurrent` remains a
+global cap, and one merge job runs after the final chunk.
 
 ## Retrieve results
 

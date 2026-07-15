@@ -15,6 +15,8 @@ from experiment_runner import (
     merge_results,
     plan_experiment,
     run_manifest_index,
+    submit_experiment,
+    submission_for_display,
     write_slurm_scripts,
 )
 
@@ -201,3 +203,62 @@ def test_slurm_scripts_use_cpu_array_tasks_and_one_merge_job(tmp_path: Path) -> 
     assert "OPENBLAS_NUM_THREADS" in array_text
     assert "experiment_runner.py merge" in merge_text
     assert compress_indices([0, 1, 2, 4, 6, 7]) == "0-2,4,6-7"
+
+
+def test_submission_display_compacts_pending_indices() -> None:
+    display = submission_for_display(
+        {"manifest": "/tmp/manifest.json", "pending": list(range(5000))}
+    )
+    assert display == {
+        "manifest": "/tmp/manifest.json",
+        "pending_count": 5000,
+        "pending_selector": "0-4999",
+    }
+
+
+def test_submission_chunks_indices_below_slurm_array_limit(tmp_path: Path) -> None:
+    payload = tiny_spec(tmp_path)
+    payload["slurm"]["array_chunk_size"] = 2
+    spec_path = write_spec(tmp_path / "chunked.json", payload)
+
+    submission = submit_experiment(spec_path, dry_run=True)
+
+    assert submission["array_chunk_count"] == 2
+    first, second = submission["array_chunks"]
+    assert first["pending_selector"] == "0-1"
+    assert second["pending_selector"] == "2-3"
+    assert "--array=0-1%2" in first["command"]
+    assert "--array=0-1%2" in second["command"]
+    assert "--dependency=afterany:<ARRAY_JOB_ID_0>" in second["command"]
+    assert Path(first["index_file"]).read_text(encoding="utf-8") == "0\n1\n"
+    assert Path(second["index_file"]).read_text(encoding="utf-8") == "2\n3\n"
+
+    array_script = Path(submission["manifest"]).with_name("run_array.sbatch")
+    script_text = array_script.read_text(encoding="utf-8")
+    assert 'sed -n "${index_line}p"' in script_text
+    assert '--index "$experiment_index"' in script_text
+
+
+def test_gamma_beta_epsilon_specs_have_expected_design() -> None:
+    root = Path(__file__).resolve().parents[1]
+    pilot = expand_points(
+        load_spec(root / "experiment_specs" / "gamma_beta_epsilon_pilot.json")
+    )
+    full = expand_points(
+        load_spec(root / "experiment_specs" / "gamma_beta_epsilon_full.json")
+    )
+
+    assert len(pilot) == 10
+    assert len(full) == 5000
+    assert {point["parameters"]["gamma"] for point in full} == {
+        0.8,
+        0.85,
+        0.9,
+        0.95,
+        0.99,
+    }
+    assert {point["parameters"]["mdp_seed"] for point in full} == set(range(10))
+    assert all(point["parameters"]["epsilon"] > 0 for point in full)
+    assert all(point["parameters"]["init_seed"] == 1234 for point in full)
+    assert all(point["parameters"]["tx_init"] == "always" for point in full)
+    assert all(point["parameters"]["rx_init"] == "random" for point in full)
