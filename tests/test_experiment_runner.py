@@ -249,16 +249,16 @@ def test_gamma_beta_epsilon_specs_have_expected_design() -> None:
     )
 
     assert len(pilot) == 10
-    assert len(full) == 5000
+    assert len(full) == 3000
     assert {point["parameters"]["gamma"] for point in full} == {
         0.8,
-        0.85,
         0.9,
         0.95,
-        0.99,
     }
     assert {point["parameters"]["mdp_seed"] for point in full} == set(range(10))
     assert all(point["parameters"]["epsilon"] > 0 for point in full)
     assert all(point["parameters"]["init_seed"] == 1234 for point in full)
     assert all(point["parameters"]["tx_init"] == "always" for point in full)
     assert all(point["parameters"]["rx_init"] == "random" for point in full)
+    assert all(point["parameters"]["delta_train"] == 70 for point in full)
+    assert all(point["parameters"]["delta_check"] == 60 for point in full)

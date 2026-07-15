@@ -1,6 +1,6 @@
 {
-  "name": "gamma_beta_epsilon_full_d100_d90",
-  "description": "Full gamma/beta/epsilon sweep over ten physical MDP seeds, with always-transmit Tx and fixed-seed random Rx initialization.",
+  "name": "gamma_beta_epsilon_g3_d70_d60",
+  "description": "Gamma/beta/epsilon sweep over ten physical MDP seeds, with three gamma values, always-transmit Tx, and fixed-seed random Rx initialization.",
   "result_detail": "compact",
   "base": {
     "n_states": 10,
@@ -11,14 +11,14 @@
     "initial_state": null,
     "tx_init": "always",
     "rx_init": "random",
-    "delta_train": 100,
-    "delta_check": 90,
+    "delta_train": 70,
+    "delta_check": 60,
     "boundary_model": "tail",
     "boundary_tx_mode": "force_transmit",
     "compute_lower_bound": false
   },
   "grid": {
-    "gamma": [0.8, 0.85, 0.9, 0.95, 0.99],
+    "gamma": [0.8, 0.9, 0.95],
     "epsilon": [0.03, 0.06, 0.09, 0.12, 0.15, 0.18, 0.21, 0.24, 0.27, 0.3],
     "beta": [0.0, 0.222222, 0.444444, 0.666667, 0.888889, 1.111111, 1.333333, 1.555556, 1.777778, 2.0],
     "mdp_seed": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
@@ -28,7 +28,7 @@
     "time": "04:00:00",
     "cpus_per_task": 1,
     "mem": "4G",
-    "max_concurrent": 32,
+    "max_concurrent": 4,
     "python_module": null,
     "extra_sbatch_args": []
   }
