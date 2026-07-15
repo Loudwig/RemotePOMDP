@@ -239,6 +239,45 @@ def test_submission_chunks_indices_below_slurm_array_limit(tmp_path: Path) -> No
     assert '--index "$experiment_index"' in script_text
 
 
+def test_array_tasks_run_multiple_points_in_parallel(tmp_path: Path) -> None:
+    payload = tiny_spec(tmp_path)
+    payload["slurm"].update(
+        {
+            "cpus_per_task": 2,
+            "points_per_task": 2,
+            "array_chunk_size": 1000,
+            "max_concurrent": 2,
+        }
+    )
+    spec_path = write_spec(tmp_path / "batched.json", payload)
+
+    submission = submit_experiment(spec_path, dry_run=True)
+
+    assert submission["max_parallel_points"] == 4
+    assert submission["array_chunk_count"] == 1
+    chunk = submission["array_chunks"][0]
+    assert chunk["array_task_count"] == 2
+    assert chunk["pending_count"] == 4
+    assert "--array=0-1%2" in chunk["command"]
+    assert Path(chunk["index_file"]).read_text(encoding="utf-8") == "0,1\n2,3\n"
+
+    array_script = Path(submission["manifest"]).with_name("run_array.sbatch")
+    script_text = array_script.read_text(encoding="utf-8")
+    assert "#SBATCH --cpus-per-task=2" in script_text
+    assert "export OPENBLAS_NUM_THREADS=1" in script_text
+    assert "worker_pids" in script_text
+    assert 'IFS=\',\' read -r -a experiment_indices' in script_text
+
+
+def test_points_per_task_requires_one_cpu_per_point(tmp_path: Path) -> None:
+    payload = tiny_spec(tmp_path)
+    payload["slurm"].update({"cpus_per_task": 2, "points_per_task": 3})
+    spec_path = write_spec(tmp_path / "too_many_workers.json", payload)
+
+    with pytest.raises(ExperimentSpecError, match="points_per_task cannot exceed"):
+        load_spec(spec_path)
+
+
 def test_gamma_beta_epsilon_specs_have_expected_design() -> None:
     root = Path(__file__).resolve().parents[1]
     pilot = expand_points(
@@ -262,3 +301,9 @@ def test_gamma_beta_epsilon_specs_have_expected_design() -> None:
     assert all(point["parameters"]["rx_init"] == "random" for point in full)
     assert all(point["parameters"]["delta_train"] == 70 for point in full)
     assert all(point["parameters"]["delta_check"] == 60 for point in full)
+    full_slurm = load_spec(
+        root / "experiment_specs" / "gamma_beta_epsilon_full.json"
+    )["slurm"]
+    assert full_slurm["cpus_per_task"] == 8
+    assert full_slurm["points_per_task"] == 8
+    assert full_slurm["max_concurrent"] == 4

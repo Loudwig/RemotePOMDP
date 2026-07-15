@@ -65,6 +65,7 @@ DEFAULT_SLURM: dict[str, Any] = {
     "partition": "CPU",
     "time": "04:00:00",
     "cpus_per_task": 1,
+    "points_per_task": 1,
     "mem": "4G",
     "max_concurrent": 16,
     "array_chunk_size": 1000,
@@ -216,9 +217,23 @@ def normalize_slurm(raw: Any) -> dict[str, Any]:
     if unknown:
         raise ExperimentSpecError(f"unknown Slurm option(s): {sorted(unknown)}")
     slurm = {**DEFAULT_SLURM, **raw}
-    for name in ("cpus_per_task", "max_concurrent", "array_chunk_size"):
-        if isinstance(slurm[name], bool) or not isinstance(slurm[name], int) or slurm[name] < 1:
+    for name in (
+        "cpus_per_task",
+        "points_per_task",
+        "max_concurrent",
+        "array_chunk_size",
+    ):
+        if (
+            isinstance(slurm[name], bool)
+            or not isinstance(slurm[name], int)
+            or slurm[name] < 1
+        ):
             raise ExperimentSpecError(f"slurm.{name} must be a positive integer")
+    if slurm["points_per_task"] > slurm["cpus_per_task"]:
+        raise ExperimentSpecError(
+            "slurm.points_per_task cannot exceed slurm.cpus_per_task; "
+            "reserve at least one CPU core for every concurrent point"
+        )
     for name in ("partition", "time", "mem"):
         if not isinstance(slurm[name], str) or not slurm[name].strip():
             raise ExperimentSpecError(f"slurm.{name} must be a non-empty string")
@@ -820,6 +835,18 @@ def render_experiment_readme(
     lines.extend(
         [
             "",
+            (
+                "Maximum concurrent experiment points: "
+                f"`{manifest['slurm']['max_concurrent'] * manifest['slurm']['points_per_task']}` "
+                f"({manifest['slurm']['max_concurrent']} Slurm array tasks × "
+                f"{manifest['slurm']['points_per_task']} points per task)."
+            ),
+        ]
+    )
+
+    lines.extend(
+        [
+            "",
             "## Files",
             "",
             "- `experiment.json`: normalized experiment specification.",
@@ -930,11 +957,12 @@ def write_slurm_scripts(manifest_path: Path) -> tuple[Path, Path]:
     # compute node.
     python_executable = Path(sys.executable).absolute()
     module_setup = _module_setup(slurm["python_module"])
+    threads_per_point = max(1, slurm["cpus_per_task"] // slurm["points_per_task"])
     common_environment = (
-        'export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"\n'
-        'export OPENBLAS_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"\n'
-        'export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"\n'
-        'export NUMEXPR_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"\n'
+        f"export OMP_NUM_THREADS={threads_per_point}\n"
+        f"export OPENBLAS_NUM_THREADS={threads_per_point}\n"
+        f"export MKL_NUM_THREADS={threads_per_point}\n"
+        f"export NUMEXPR_NUM_THREADS={threads_per_point}\n"
     )
 
     array_script = output_dir / "run_array.sbatch"
@@ -950,13 +978,26 @@ def write_slurm_scripts(manifest_path: Path) -> tuple[Path, Path]:
 set -euo pipefail
 index_file="${{1:?missing array index file}}"
 index_line=$((SLURM_ARRAY_TASK_ID + 1))
-experiment_index="$(sed -n "${{index_line}}p" "$index_file")"
-if [[ -z "$experiment_index" ]]; then
+experiment_index_group="$(sed -n "${{index_line}}p" "$index_file")"
+if [[ -z "$experiment_index_group" ]]; then
     echo "No manifest index mapped for Slurm task $SLURM_ARRAY_TASK_ID" >&2
     exit 2
 fi
 {module_setup}{common_environment}cd {shlex.quote(str(PROJECT_ROOT))}
-{shlex.quote(str(python_executable))} {shlex.quote(str(runner))} run-one {shlex.quote(str(manifest_path))} --index "$experiment_index"
+IFS=',' read -r -a experiment_indices <<< "$experiment_index_group"
+worker_pids=()
+for experiment_index in "${{experiment_indices[@]}}"; do
+    {shlex.quote(str(python_executable))} {shlex.quote(str(runner))} run-one {shlex.quote(str(manifest_path))} --index "$experiment_index" &
+    worker_pids+=("$!")
+done
+
+worker_status=0
+for worker_pid in "${{worker_pids[@]}}"; do
+    if ! wait "$worker_pid"; then
+        worker_status=1
+    fi
+done
+exit "$worker_status"
 """
     atomic_write_text(array_script, array_content, mode=0o755)
 
@@ -994,20 +1035,33 @@ def prepare_array_chunks(
 ) -> list[dict[str, Any]]:
     """Write stable local-task-to-manifest-index mappings for Slurm chunks."""
     chunk_size = manifest["slurm"]["array_chunk_size"]
+    points_per_task = manifest["slurm"]["points_per_task"]
+    index_groups = [
+        pending[start : start + points_per_task]
+        for start in range(0, len(pending), points_per_task)
+    ]
     submission_dir = (
         Path(manifest["output_dir"])
         / "submissions"
         / f"{time.time_ns()}_{digest(pending)}"
     )
     chunks: list[dict[str, Any]] = []
-    for chunk_number, start in enumerate(range(0, len(pending), chunk_size)):
-        indices = pending[start : start + chunk_size]
+    for chunk_number, start in enumerate(range(0, len(index_groups), chunk_size)):
+        chunk_groups = index_groups[start : start + chunk_size]
+        indices = [index for group in chunk_groups for index in group]
         index_file = submission_dir / f"indices_{chunk_number:04d}.txt"
-        atomic_write_text(index_file, "".join(f"{index}\n" for index in indices))
+        atomic_write_text(
+            index_file,
+            "".join(
+                ",".join(str(index) for index in group) + "\n"
+                for group in chunk_groups
+            ),
+        )
         chunks.append(
             {
                 "chunk": chunk_number,
                 "indices": indices,
+                "index_groups": chunk_groups,
                 "index_file": str(index_file),
             }
         )
@@ -1026,7 +1080,7 @@ def build_array_command(
         command.append(f"--dependency=afterany:{dependency}")
     command.extend(
         [
-            f"--array=0-{len(chunk['indices']) - 1}%{max_concurrent}",
+            f"--array=0-{len(chunk['index_groups']) - 1}%{max_concurrent}",
             str(array_script),
             chunk["index_file"],
         ]
@@ -1037,6 +1091,7 @@ def build_array_command(
 def chunk_summary(chunk: dict[str, Any], command: list[str]) -> dict[str, Any]:
     return {
         "chunk": chunk["chunk"],
+        "array_task_count": len(chunk["index_groups"]),
         "pending_count": len(chunk["indices"]),
         "pending_selector": compress_indices(chunk["indices"]),
         "index_file": chunk["index_file"],
@@ -1061,6 +1116,7 @@ def submit_experiment(
 
     extra = manifest["slurm"]["extra_sbatch_args"]
     max_concurrent = manifest["slurm"]["max_concurrent"]
+    max_parallel_points = max_concurrent * manifest["slurm"]["points_per_task"]
     chunks = prepare_array_chunks(manifest, pending)
     if dry_run:
         chunk_details = []
@@ -1073,6 +1129,7 @@ def submit_experiment(
         payload = {
             "manifest": str(manifest_path),
             "pending": pending,
+            "max_parallel_points": max_parallel_points,
             "array_chunk_count": len(chunks),
             "array_chunks": chunk_details,
             "merge_command_template": shlex.join(
@@ -1116,6 +1173,7 @@ def submit_experiment(
         "submitted_at": utc_now(),
         "manifest": str(manifest_path),
         "pending_indices": pending,
+        "max_parallel_points": max_parallel_points,
         "array_chunk_count": len(chunks),
         "array_jobs": array_jobs,
         "merge_job_id": merge_job_id,

@@ -1,9 +1,9 @@
 # Running experiment grids on the LTCI cluster
 
 `experiment_runner.py` turns a JSON experiment specification into a Slurm job
-array. Each array task runs one parameter point and writes one atomic JSON
-shard. A dependent merge job creates a single `results.json` after all array
-tasks finish.
+array. Each array task runs one or more independent parameter points and every
+point writes one atomic JSON shard. A dependent merge job creates a single
+`results.json` after all array tasks finish.
 
 This layout is intentional: multiple compute nodes must not concurrently edit
 the same JSON file on shared NFS storage. Independent shards make interrupted
@@ -128,9 +128,14 @@ Final violations are retained individually in `core_violations`,
 derived from these records rather than stored as a duplicate list.
 
 The Slurm defaults target the `CPU` partition because the current tabular
-solver does not use CUDA. `max_concurrent` limits how many points the scheduler
-may run simultaneously. Slurm remains free to place multiple points on the
-same compute node when resources permit.
+solver does not use CUDA. `max_concurrent` limits how many Slurm array tasks
+the scheduler may run simultaneously. `points_per_task` controls how many
+independent experiment points each task launches concurrently. Reserve at
+least the same number of cores with `cpus_per_task`. For example,
+`max_concurrent: 4`, `cpus_per_task: 8`, and `points_per_task: 8` use at most
+four Slurm jobs but can train 32 experiment points at once. Each point still
+writes its own shard, so merging and resuming work exactly as before. Slurm
+remains free to place those tasks on the same or different compute nodes.
 
 The runner uses the exact Python executable used for submission. On the LTCI
 cluster, invoke it with `/usr/bin/python3`; `/usr/bin/python` is not present on
@@ -138,10 +143,11 @@ all compute nodes. The system Python already provides NumPy. A software module
 can still be requested with `slurm.python_module`, but the default is `null`.
 
 Because the cluster has `MaxArraySize=1001`, `array_chunk_size` defaults to
-1000. Larger experiments are transparently split into chained arrays with
-local task IDs `0-999`. Each task reads a generated mapping file to find its
-global manifest index. Chunks run sequentially so `max_concurrent` remains a
-global cap, and one merge job runs after the final chunk.
+1000 Slurm tasks. Larger experiments are transparently split into chained
+arrays with local task IDs `0-999`. Each task reads a generated mapping file to
+find its group of global manifest indices. Chunks run sequentially so
+`max_concurrent` remains a global Slurm-job cap, and one merge job runs after
+the final chunk.
 
 ## Retrieve results
 
