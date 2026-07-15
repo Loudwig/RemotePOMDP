@@ -923,6 +923,11 @@ def write_slurm_scripts(manifest_path: Path) -> tuple[Path, Path]:
     slurm = manifest["slurm"]
     safe_job_name = re.sub(r"[^A-Za-z0-9_-]", "_", manifest["name"])[:80]
     runner = PROJECT_ROOT / "experiment_runner.py"
+    # Capture the interpreter that planned/submitted the experiment instead of
+    # relying on PATH inside a Slurm login shell.  In particular, this keeps a
+    # caller's virtual environment (and its installed NumPy) available on the
+    # compute node.
+    python_executable = Path(sys.executable).absolute()
     module_setup = _module_setup(slurm["python_module"])
     common_environment = (
         'export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"\n'
@@ -943,7 +948,7 @@ def write_slurm_scripts(manifest_path: Path) -> tuple[Path, Path]:
 
 set -euo pipefail
 {module_setup}{common_environment}cd {shlex.quote(str(PROJECT_ROOT))}
-python {shlex.quote(str(runner))} run-one {shlex.quote(str(manifest_path))}
+{shlex.quote(str(python_executable))} {shlex.quote(str(runner))} run-one {shlex.quote(str(manifest_path))}
 """
     atomic_write_text(array_script, array_content, mode=0o755)
 
@@ -959,7 +964,7 @@ python {shlex.quote(str(runner))} run-one {shlex.quote(str(manifest_path))}
 
 set -euo pipefail
 {module_setup}cd {shlex.quote(str(PROJECT_ROOT))}
-python {shlex.quote(str(runner))} merge {shlex.quote(str(manifest_path))}
+{shlex.quote(str(python_executable))} {shlex.quote(str(runner))} merge {shlex.quote(str(manifest_path))}
 """
     atomic_write_text(merge_script, merge_content, mode=0o755)
     return array_script, merge_script

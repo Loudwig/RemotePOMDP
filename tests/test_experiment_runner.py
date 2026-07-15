@@ -1,6 +1,7 @@
 """Tests for the reusable local and Slurm experiment runner."""
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -192,7 +193,10 @@ def test_slurm_scripts_use_cpu_array_tasks_and_one_merge_job(tmp_path: Path) -> 
     array_script, merge_script = write_slurm_scripts(manifest_path)
     array_text = array_script.read_text(encoding="utf-8")
     merge_text = merge_script.read_text(encoding="utf-8")
+    expected_python = str(Path(sys.executable).absolute())
     assert "#SBATCH --partition=CPU" in array_text
+    assert expected_python in array_text
+    assert expected_python in merge_text
     assert "experiment_runner.py run-one" in array_text
     assert "OPENBLAS_NUM_THREADS" in array_text
     assert "experiment_runner.py merge" in merge_text
