@@ -24,6 +24,17 @@ python experiment_runner.py submit experiment_specs/example_grid.json --dry-run
 python experiment_runner.py submit experiment_specs/example_grid.json
 ```
 
+For a first end-to-end check, use the dedicated four-point smoke test. It is
+small enough to finish quickly and uses two concurrent Slurm array tasks:
+
+```bash
+# Prepare and validate everything without submitting a job.
+python experiment_runner.py submit experiment_specs/smoke_test.json --dry-run
+
+# Submit only after the dry-run output looks correct.
+python experiment_runner.py submit experiment_specs/smoke_test.json
+```
+
 The command prints the array and merge job IDs. Monitor them with:
 
 ```bash
