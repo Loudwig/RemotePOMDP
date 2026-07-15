@@ -1,3 +1,5 @@
+"""Tests for the remote age-aware policy-iteration implementation."""
+
 from pathlib import Path
 
 import numpy as np
@@ -38,7 +40,7 @@ def test_effcom_family_has_expected_densities_and_normalized_rewards() -> None:
 def test_zero_erasure_is_rejected_and_documented() -> None:
     with pytest.raises(NotImplementedError, match="TODO.md"):
         SolverConfig(gamma=0.9, beta=0.1, epsilon=0.0)
-    todo = Path(__file__).with_name("TODO.md").read_text()
+    todo = (Path(__file__).resolve().parents[1] / "TODO.md").read_text()
     assert "epsilon == 0" in todo
 
 
