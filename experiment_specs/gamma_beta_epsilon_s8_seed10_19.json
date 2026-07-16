@@ -1,0 +1,52 @@
+{
+  "name": "gamma_beta_epsilon_s8_seed10_19_init1111_p8",
+  "description": "S=8 gamma/beta/epsilon sweep over ten physical MDP seeds. Gamma 0.9 uses ten betas from 0 to 2; gamma 0.99 uses ten betas from 0 to 22. Tx starts fully transmitting and Rx starts from a fixed-seed random policy.",
+  "result_detail": "compact",
+  "base": {
+    "n_states": 8,
+    "n_actions": 2,
+    "density": 0.625,
+    "reward_decay": 10.0,
+    "init_seed": 1111,
+    "initial_state": null,
+    "tx_init": "always",
+    "rx_init": "random",
+    "delta_train": 70,
+    "delta_check": 60,
+    "boundary_model": "tail",
+    "boundary_tx_mode": "force_transmit",
+    "compute_lower_bound": false
+  },
+  "blocks": [
+    {
+      "base": {
+        "gamma": 0.9
+      },
+      "grid": {
+        "beta": [0.0, 0.222222, 0.444444, 0.666667, 0.888889, 1.111111, 1.333333, 1.555556, 1.777778, 2.0],
+        "epsilon": [0.03, 0.06, 0.09, 0.12, 0.15, 0.18, 0.21, 0.24, 0.27, 0.3],
+        "mdp_seed": [10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+      }
+    },
+    {
+      "base": {
+        "gamma": 0.99
+      },
+      "grid": {
+        "beta": [0.0, 2.444444, 4.888889, 7.333333, 9.777778, 12.222222, 14.666667, 17.111111, 19.555556, 22.0],
+        "epsilon": [0.03, 0.06, 0.09, 0.12, 0.15, 0.18, 0.21, 0.24, 0.27, 0.3],
+        "mdp_seed": [10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+      }
+    }
+  ],
+  "slurm": {
+    "partition": "CPU",
+    "time": "04:00:00",
+    "cpus_per_task": 8,
+    "points_per_task": 8,
+    "mem": "32G",
+    "max_concurrent": 4,
+    "python_module": null,
+    "extra_sbatch_args": []
+  }
+}

@@ -96,6 +96,25 @@ For a non-Cartesian design, replace `grid` with an explicit `points` list:
 }
 ```
 
+When one parameter range depends on another parameter, use `blocks`. The
+runner expands each block independently and combines their points into one
+manifest. For example, this gives each gamma its own beta range:
+
+```json
+{
+  "blocks": [
+    {
+      "base": {"gamma": 0.9},
+      "grid": {"beta": [0.0, 1.0, 2.0], "mdp_seed": [10, 11]}
+    },
+    {
+      "base": {"gamma": 0.99},
+      "grid": {"beta": [0.0, 11.0, 22.0], "mdp_seed": [10, 11]}
+    }
+  ]
+}
+```
+
 Use `"result_detail": "compact"` for plotting-oriented records with metrics,
 histories, violations, and policy hashes. Use `"full"` to additionally retain
 all diagnostics and complete policy tables; this can make `results.json` much

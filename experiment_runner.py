@@ -78,6 +78,7 @@ TOP_LEVEL_KEYS = {
     "description",
     "base",
     "grid",
+    "blocks",
     "points",
     "result_detail",
     "output_dir",
@@ -289,12 +290,65 @@ def expand_points(spec: dict[str, Any]) -> list[dict[str, Any]]:
     base = {**DEFAULT_PARAMETERS, **raw_base}
 
     has_grid = "grid" in spec
+    has_blocks = "blocks" in spec
     has_points = "points" in spec
-    if has_grid and has_points:
-        raise ExperimentSpecError("use either grid or points, not both")
+    if sum((has_grid, has_blocks, has_points)) > 1:
+        raise ExperimentSpecError("use exactly one of grid, blocks, or points")
 
     overrides: list[dict[str, Any]]
-    if has_points:
+    if has_blocks:
+        raw_blocks = spec["blocks"]
+        if not isinstance(raw_blocks, list) or not raw_blocks:
+            raise ExperimentSpecError("blocks must be a non-empty list")
+        overrides = []
+        for block_index, block in enumerate(raw_blocks):
+            if not isinstance(block, dict):
+                raise ExperimentSpecError(
+                    f"blocks[{block_index}] must be a JSON object"
+                )
+            unknown_block = set(block) - {"base", "grid"}
+            if unknown_block:
+                raise ExperimentSpecError(
+                    f"unknown key(s) in blocks[{block_index}]: "
+                    f"{sorted(unknown_block)}"
+                )
+            block_base = block.get("base", {})
+            if not isinstance(block_base, dict):
+                raise ExperimentSpecError(
+                    f"blocks[{block_index}].base must be a JSON object"
+                )
+            unknown_block_base = set(block_base) - set(DEFAULT_PARAMETERS)
+            if unknown_block_base:
+                raise ExperimentSpecError(
+                    f"unknown parameter(s) in blocks[{block_index}].base: "
+                    f"{sorted(unknown_block_base)}"
+                )
+            block_grid = block.get("grid", {})
+            if not isinstance(block_grid, dict):
+                raise ExperimentSpecError(
+                    f"blocks[{block_index}].grid must be a JSON object"
+                )
+            unknown_block_grid = set(block_grid) - set(DEFAULT_PARAMETERS)
+            if unknown_block_grid:
+                raise ExperimentSpecError(
+                    f"unknown parameter(s) in blocks[{block_index}].grid: "
+                    f"{sorted(unknown_block_grid)}"
+                )
+            names = list(block_grid)
+            values: list[list[Any]] = []
+            for name in names:
+                candidates = block_grid[name]
+                if not isinstance(candidates, list) or not candidates:
+                    raise ExperimentSpecError(
+                        f"blocks[{block_index}].grid.{name} must be a non-empty list"
+                    )
+                values.append(candidates)
+            combinations = itertools.product(*values) if values else [()]
+            overrides.extend(
+                {**block_base, **dict(zip(names, combination))}
+                for combination in combinations
+            )
+    elif has_points:
         raw_points = spec["points"]
         if not isinstance(raw_points, list) or not raw_points:
             raise ExperimentSpecError("points must be a non-empty list")
@@ -746,6 +800,7 @@ def render_experiment_readme(
     output_dir = Path(manifest["output_dir"])
     base = spec.get("base", {})
     grid = spec.get("grid")
+    blocks = spec.get("blocks")
     points = spec.get("points")
 
     lines = [
@@ -815,6 +870,19 @@ def render_experiment_readme(
         lines.extend(["Cartesian grid:", "", "| Parameter | Values |", "|---|---|"])
         for name, values in grid.items():
             lines.append(f"| `{name}` | {markdown_value(values)} |")
+    elif blocks is not None:
+        lines.append(f"{len(blocks)} conditional Cartesian grids:")
+        for block_index, block in enumerate(blocks, start=1):
+            lines.extend(["", f"### Grid block {block_index}", ""])
+            block_base = block.get("base", {})
+            if block_base:
+                lines.extend(["Fixed overrides:", "", "| Parameter | Value |", "|---|---|"])
+                for name, value in block_base.items():
+                    lines.append(f"| `{name}` | {markdown_value(value)} |")
+                lines.append("")
+            lines.extend(["Cartesian grid:", "", "| Parameter | Values |", "|---|---|"])
+            for name, values in block.get("grid", {}).items():
+                lines.append(f"| `{name}` | {markdown_value(values)} |")
     elif points is not None:
         lines.append(f"Explicit point list with {len(points)} entries.")
     else:

@@ -107,6 +107,40 @@ def test_explicit_duplicate_points_are_rejected(tmp_path: Path) -> None:
         expand_points(load_spec(path))
 
 
+def test_blocked_grids_support_conditional_parameter_ranges(tmp_path: Path) -> None:
+    path = write_spec(
+        tmp_path / "blocks.json",
+        {
+            "name": "conditional_ranges",
+            "base": {
+                "n_states": 2,
+                "n_actions": 1,
+                "density": 0.5,
+                "delta_train": 2,
+                "delta_check": 1,
+            },
+            "blocks": [
+                {
+                    "base": {"gamma": 0.9},
+                    "grid": {"beta": [0.0, 2.0], "mdp_seed": [10, 11]},
+                },
+                {
+                    "base": {"gamma": 0.99},
+                    "grid": {"beta": [0.0, 22.0], "mdp_seed": [10, 11]},
+                },
+            ],
+        },
+    )
+
+    points = expand_points(load_spec(path))
+
+    assert len(points) == 8
+    assert {
+        (point["parameters"]["gamma"], point["parameters"]["beta"])
+        for point in points
+    } == {(0.9, 0.0), (0.9, 2.0), (0.99, 0.0), (0.99, 22.0)}
+
+
 def test_run_shards_merge_and_resume(tmp_path: Path) -> None:
     spec_path = write_spec(tmp_path / "tiny.json", tiny_spec(tmp_path))
     manifest_path = plan_experiment(spec_path)
@@ -307,3 +341,51 @@ def test_gamma_beta_epsilon_specs_have_expected_design() -> None:
     assert full_slurm["cpus_per_task"] == 8
     assert full_slurm["points_per_task"] == 8
     assert full_slurm["max_concurrent"] == 4
+
+
+def test_s8_gamma_specific_beta_spec_has_expected_design() -> None:
+    root = Path(__file__).resolve().parents[1]
+    spec = load_spec(
+        root / "experiment_specs" / "gamma_beta_epsilon_s8_seed10_19.json"
+    )
+    points = expand_points(spec)
+
+    assert len(points) == 2000
+    assert {point["parameters"]["n_states"] for point in points} == {8}
+    assert {point["parameters"]["n_actions"] for point in points} == {2}
+    assert {point["parameters"]["density"] for point in points} == {0.625}
+    assert {point["parameters"]["mdp_seed"] for point in points} == set(
+        range(10, 20)
+    )
+    assert {point["parameters"]["init_seed"] for point in points} == {1111}
+    assert {point["parameters"]["epsilon"] for point in points} == {
+        0.03,
+        0.06,
+        0.09,
+        0.12,
+        0.15,
+        0.18,
+        0.21,
+        0.24,
+        0.27,
+        0.3,
+    }
+    betas_by_gamma = {
+        gamma: {
+            point["parameters"]["beta"]
+            for point in points
+            if point["parameters"]["gamma"] == gamma
+        }
+        for gamma in (0.9, 0.99)
+    }
+    assert len(betas_by_gamma[0.9]) == 10
+    assert min(betas_by_gamma[0.9]) == 0.0
+    assert max(betas_by_gamma[0.9]) == 2.0
+    assert len(betas_by_gamma[0.99]) == 10
+    assert min(betas_by_gamma[0.99]) == 0.0
+    assert max(betas_by_gamma[0.99]) == 22.0
+    assert all(point["parameters"]["tx_init"] == "always" for point in points)
+    assert all(point["parameters"]["rx_init"] == "random" for point in points)
+    assert spec["slurm"]["cpus_per_task"] == 8
+    assert spec["slurm"]["points_per_task"] == 8
+    assert spec["slurm"]["max_concurrent"] == 4
