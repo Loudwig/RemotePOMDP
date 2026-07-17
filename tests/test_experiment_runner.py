@@ -389,3 +389,49 @@ def test_s8_gamma_specific_beta_spec_has_expected_design() -> None:
     assert spec["slurm"]["cpus_per_task"] == 8
     assert spec["slurm"]["points_per_task"] == 8
     assert spec["slurm"]["max_concurrent"] == 4
+
+
+def test_s6_mdp1111_three_tx_initializations_spec_has_expected_design() -> None:
+    root = Path(__file__).resolve().parents[1]
+    spec = load_spec(
+        root / "experiment_specs" / "gamma_beta_epsilon_s6_mdp1111_tx3.json"
+    )
+    points = expand_points(spec)
+
+    assert len(points) == 240
+    assert {point["parameters"]["n_states"] for point in points} == {6}
+    assert {point["parameters"]["n_actions"] for point in points} == {2}
+    assert {point["parameters"]["density"] for point in points} == {0.5}
+    assert {point["parameters"]["reward_decay"] for point in points} == {10.0}
+    assert {point["parameters"]["mdp_seed"] for point in points} == {1111}
+    assert {point["parameters"]["init_seed"] for point in points} == {1111}
+    assert {point["parameters"]["gamma"] for point in points} == {0.9, 0.99}
+    assert {point["parameters"]["beta"] for point in points} == {
+        0.0,
+        0.05,
+        0.1,
+        0.15,
+    }
+    assert {point["parameters"]["epsilon"] for point in points} == {
+        0.01,
+        0.02,
+        0.03,
+        0.04,
+        0.05,
+        0.06,
+        0.07,
+        0.08,
+        0.09,
+        0.1,
+    }
+    assert {point["parameters"]["tx_init"] for point in points} == {
+        "always",
+        "never",
+        "random",
+    }
+    assert {point["parameters"]["rx_init"] for point in points} == {"random"}
+    assert all(point["parameters"]["delta_train"] == 70 for point in points)
+    assert all(point["parameters"]["delta_check"] == 60 for point in points)
+    assert spec["slurm"]["cpus_per_task"] == 8
+    assert spec["slurm"]["points_per_task"] == 8
+    assert spec["slurm"]["max_concurrent"] == 4
