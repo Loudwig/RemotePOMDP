@@ -1,4 +1,4 @@
-"""Reusable local and Slurm runner for RemotePOMDP experiment grids.
+"""Reusable local and Slurm runner for RemotePOMDP API experiment grids.
 
 Each grid point writes its own atomic JSON shard.  A separate merge step builds
 the single ``results.json`` file, avoiding concurrent writes from Slurm tasks.

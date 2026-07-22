@@ -1,0 +1,170 @@
+{
+  "action_encoding": {
+    "formula": "action = prescription_index * n_receiver_actions + receiver_action",
+    "solver_jpo_action_offset": 1,
+    "state_zero_bit": "most_significant"
+  },
+  "bounds": {
+    "gap": 0.0020048496459050824,
+    "lower_objective": 6.206471500011073,
+    "lower_values": [
+      6.428652477535304,
+      5.690225206965981,
+      5.833993882959246,
+      6.428652477535304,
+      6.428652477535304,
+      6.428652477535304
+    ],
+    "root_gap": 0.002321234236959155,
+    "root_lower_objective": 6.206471500011073,
+    "root_upper_objective": 6.208792734248032,
+    "upper_objective": 6.208476349656978,
+    "upper_values": [
+      6.428652499874576,
+      5.690255311421467,
+      5.845992787022103,
+      6.428652499874576,
+      6.428652499874576,
+      6.428652499874576
+    ]
+  },
+  "initialization": {
+    "initial_beliefs": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "initial_weights": [
+      0.16666666666666666,
+      0.16666666666666666,
+      0.16666666666666666,
+      0.16666666666666666,
+      0.16666666666666666,
+      0.16666666666666666
+    ],
+    "kind": "single synthetic root revealing a uniformly sampled physical state",
+    "root_value_scale": "V_root / gamma, gamma=0.9"
+  },
+  "model": {
+    "beta": 0.05,
+    "epsilon": 0.06000000000000001,
+    "gamma": 0.9,
+    "mdp_density": 0.5,
+    "mdp_seed": 150432703,
+    "mdp_sha256": "f2c791daeb500561f8bf1592ef7c007b0036a276bacdbe73c62643af12a2b124",
+    "n_jpo_actions": 128,
+    "n_prescriptions": 64,
+    "n_receiver_actions": 2,
+    "n_states": 6
+  },
+  "runtime": {
+    "julia": "1.12.6",
+    "native_sarsop": "0.1.4",
+    "pomdp_tools": "1.1.0",
+    "pomdps": "1.0.0"
+  },
+  "solver": {
+    "delta": 0.0001,
+    "export_beliefs": false,
+    "initial_bound_max_time": 30.0,
+    "initial_bound_residual": 1e-08,
+    "initial_upper_bound": "fully_observable",
+    "kappa": 0.5,
+    "max_steps": 1000000,
+    "max_time": 600.0,
+    "precision": 0.01,
+    "prune_threshold": 0.1,
+    "search_epsilon": 0.01,
+    "use_binning": true
+  },
+  "training": {
+    "alpha_count": 3,
+    "belief_count": 23479,
+    "elapsed_seconds": 0.11676597595214844,
+    "history": [
+      {
+        "elapsed_seconds": 6.9141387939453125e-06,
+        "initial_gap": 116.20879273424808,
+        "initial_lower_objective": -110.00000000000004,
+        "initial_upper_objective": 6.208792734248032,
+        "iteration": 0,
+        "root_gap": 104.58791346082327,
+        "root_lower": -99.00000000000004,
+        "root_upper": 5.587913460823229
+      },
+      {
+        "elapsed_seconds": 0.00031495094299316406,
+        "initial_gap": 0.09379507900681539,
+        "initial_lower_objective": 6.114997655241217,
+        "initial_upper_objective": 6.208792734248032,
+        "iteration": 1,
+        "root_gap": 0.08441557110613385,
+        "root_lower": 5.503497889717095,
+        "root_upper": 5.587913460823229
+      },
+      {
+        "elapsed_seconds": 0.006827116012573242,
+        "initial_gap": 0.002321234236959155,
+        "initial_lower_objective": 6.206471500011073,
+        "initial_upper_objective": 6.208792734248032,
+        "iteration": 2,
+        "root_gap": 0.0020891108132632397,
+        "root_lower": 5.585824350009966,
+        "root_upper": 5.587913460823229
+      }
+    ],
+    "initial_lower_residual": 8.788533456538516e-09,
+    "initial_lower_subsolution_shift": 2.67441624401954e-09,
+    "initial_upper_bound": "fully_observable",
+    "initial_upper_iterations": 12,
+    "initial_upper_residual": 1.9091626057843314e-09,
+    "initialization_seconds": 0.21082210540771484,
+    "iterations": 2,
+    "stop_reason": "precision"
+  }
+}

@@ -1,0 +1,180 @@
+{
+  "action_encoding": {
+    "formula": "action = prescription_index * n_receiver_actions + receiver_action",
+    "solver_jpo_action_offset": 1,
+    "state_zero_bit": "most_significant"
+  },
+  "bounds": {
+    "gap": 0.007410736360811576,
+    "lower_objective": 2.4776262047072066,
+    "lower_values": [
+      2.8176462867402297,
+      2.3911852852902635,
+      2.421922205493445,
+      2.3911777246565302,
+      2.4219128630313866,
+      2.4219128630313866
+    ],
+    "root_gap": 0.0074107363622975975,
+    "root_lower_objective": 2.477626204707207,
+    "root_upper_objective": 2.4850369410695046,
+    "upper_objective": 2.485036941068018,
+    "upper_values": [
+      2.8235427979335794,
+      2.3990027670841547,
+      2.42558355829092,
+      2.410925388538205,
+      2.425583567280625,
+      2.425583567280625
+    ]
+  },
+  "initialization": {
+    "initial_beliefs": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "initial_weights": [
+      0.16666666666666666,
+      0.16666666666666666,
+      0.16666666666666666,
+      0.16666666666666666,
+      0.16666666666666666,
+      0.16666666666666666
+    ],
+    "kind": "single synthetic root revealing a uniformly sampled physical state",
+    "root_value_scale": "V_root / gamma, gamma=0.9"
+  },
+  "model": {
+    "beta": 0.05,
+    "epsilon": 0.07,
+    "gamma": 0.9,
+    "mdp_density": 0.5,
+    "mdp_seed": 1682953351,
+    "mdp_sha256": "54f7d69e33d59c5cd807e8ad4322b83bab80a0a6b6ffb356296f36bf8b20c221",
+    "n_jpo_actions": 128,
+    "n_prescriptions": 64,
+    "n_receiver_actions": 2,
+    "n_states": 6
+  },
+  "runtime": {
+    "julia": "1.12.6",
+    "native_sarsop": "0.1.4",
+    "pomdp_tools": "1.1.0",
+    "pomdps": "1.0.0"
+  },
+  "solver": {
+    "delta": 0.0001,
+    "export_beliefs": false,
+    "initial_bound_max_time": 30.0,
+    "initial_bound_residual": 1e-08,
+    "initial_upper_bound": "fully_observable",
+    "kappa": 0.5,
+    "max_steps": 1000000,
+    "max_time": 600.0,
+    "precision": 0.01,
+    "prune_threshold": 0.1,
+    "search_epsilon": 0.01,
+    "use_binning": true
+  },
+  "training": {
+    "alpha_count": 3,
+    "belief_count": 62308,
+    "elapsed_seconds": 0.1548910140991211,
+    "history": [
+      {
+        "elapsed_seconds": 1.2874603271484375e-05,
+        "initial_gap": 112.48702404614201,
+        "initial_lower_objective": -110.00000000000004,
+        "initial_upper_objective": 2.4870240461419777,
+        "iteration": 0,
+        "root_gap": 101.23832164152782,
+        "root_lower": -99.00000000000004,
+        "root_upper": 2.23832164152778
+      },
+      {
+        "elapsed_seconds": 0.00037598609924316406,
+        "initial_gap": 0.27305098194945615,
+        "initial_lower_objective": 2.2139730641925213,
+        "initial_upper_objective": 2.4870240461419777,
+        "iteration": 1,
+        "root_gap": 0.24574588375451056,
+        "root_lower": 1.9925757577732692,
+        "root_upper": 2.23832164152778
+      },
+      {
+        "elapsed_seconds": 0.014578819274902344,
+        "initial_gap": 0.012849108667457957,
+        "initial_lower_objective": 2.4741749374745194,
+        "initial_upper_objective": 2.4870240461419777,
+        "iteration": 2,
+        "root_gap": 0.011564197800712162,
+        "root_lower": 2.2267574437270676,
+        "root_upper": 2.23832164152778
+      },
+      {
+        "elapsed_seconds": 0.03320479393005371,
+        "initial_gap": 0.0074107363622975975,
+        "initial_lower_objective": 2.477626204707207,
+        "initial_upper_objective": 2.4850369410695046,
+        "iteration": 3,
+        "root_gap": 0.006669662726067838,
+        "root_lower": 2.2298635842364862,
+        "root_upper": 2.236533246962554
+      }
+    ],
+    "initial_lower_residual": 8.468313161813512e-09,
+    "initial_lower_subsolution_shift": 0.0,
+    "initial_upper_bound": "fully_observable",
+    "initial_upper_iterations": 167,
+    "initial_upper_residual": 9.988561533447182e-09,
+    "initialization_seconds": 0.24018287658691406,
+    "iterations": 3,
+    "stop_reason": "precision"
+  }
+}

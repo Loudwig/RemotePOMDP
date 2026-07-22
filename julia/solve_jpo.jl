@@ -249,35 +249,45 @@ function solve_and_export(input_directory::String, output_directory::String)
     end
     initial_lower_subsolution_shift = solver.init_lower.max_subsolution_shift
     history = Vector{NTuple{5,Float64}}()
+    mkpath(output_directory)
+    history_io = open(joinpath(output_directory, "history.tsv"), "w")
+    println(history_io, "iteration\telapsed_seconds\troot_lower\troot_upper\troot_gap")
+    flush(history_io)
     start_time = time()
     iteration = 0
 
     function record_history!()
         lower = tree.V_lower[1]
         upper = tree.V_upper[1]
-        push!(history, (
+        row = (
             Float64(iteration),
             time() - start_time,
             lower,
             upper,
             upper - lower,
-        ))
+        )
+        push!(history, row)
+        println(history_io, join(row, '\t'))
+        flush(history_io)
     end
 
-    record_history!()
-    while (
-        iteration < solver.max_steps
-        && time() - start_time < solver.max_time
-        && NativeSARSOP.root_diff(tree) > solver.precision
-    )
-        NativeSARSOP.sample!(solver, tree)
-        NativeSARSOP.backup!(tree)
-        NativeSARSOP.prune!(solver, tree)
-        iteration += 1
+    try
         record_history!()
+        while (
+            iteration < solver.max_steps
+            && time() - start_time < solver.max_time
+            && NativeSARSOP.root_diff(tree) > solver.precision
+        )
+            NativeSARSOP.sample!(solver, tree)
+            NativeSARSOP.backup!(tree)
+            NativeSARSOP.prune!(solver, tree)
+            iteration += 1
+            record_history!()
+        end
+    finally
+        close(history_io)
     end
 
-    mkpath(output_directory)
     alpha_vectors = hcat([collect(alpha.alpha) for alpha in tree.Γ]...)
     # AlphaVec.action indexes ordered_actions(model), whose labels are 1-based.
     # The Python-facing action map is deliberately converted back to zero-based.
@@ -320,13 +330,6 @@ function solve_and_export(input_directory::String, output_directory::String)
     end
     write_float64(joinpath(output_directory, "dirac_lower.bin"), dirac_lower)
     write_float64(joinpath(output_directory, "dirac_upper.bin"), dirac_upper)
-
-    open(joinpath(output_directory, "history.tsv"), "w") do io
-        println(io, "iteration\telapsed_seconds\troot_lower\troot_upper\troot_gap")
-        for row in history
-            println(io, join(row, '\t'))
-        end
-    end
 
     stop_reason = if NativeSARSOP.root_diff(tree) <= solver.precision
         "precision"

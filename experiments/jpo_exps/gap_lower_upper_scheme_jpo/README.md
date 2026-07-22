@@ -63,7 +63,7 @@ retained in `policy_gap_by_run.csv`.
 From the repository root:
 
 ```bash
-python3 experiments/gap_lower_upper_scheme_jpo/run_experiment.py
+python3 experiments/jpo_exps/gap_lower_upper_scheme_jpo/run_experiment.py
 ```
 
 Useful options:
@@ -78,15 +78,17 @@ The existing completed points are reused automatically.
 ## Analysis and figures
 
 Execute `analysis.ipynb` to analyze every accepted seed currently stored
-in `results.json`. The notebook is not capped at 30 seeds: future accepted
+in `results.json`. future accepted
 seeds are included automatically when it is rerun.
 
 It writes:
 
 - `delta_w_statistics.csv`, containing the mean, standard deviation, median,
   extrema, positive count/fraction, and conditional positive-gap statistics;
-- `policy_gap_by_run.csv`, containing `delta W`, its rigorous lower and upper
-  bounds, and both policy values for every run;
+- `policy_gap_by_run.csv`, containing `delta W`, its rigorous lower and upper bounds, and both policy values for every run; 
+
+Note (every policy obtain with sarsop as a lower and upper bound bc when we evaluate we run it for H steps and approximate the rest but the gap is very narrow)
+  
 - `solver_gap_by_run.csv`, `solver_gap_summary.csv`, and
   `solver_gap_summary.json`, reporting the achieved solver precision;
 - `plots/delta_w_mean_trajectories.{png,pdf}`;

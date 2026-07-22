@@ -1,0 +1,160 @@
+{
+  "action_encoding": {
+    "formula": "action = prescription_index * n_receiver_actions + receiver_action",
+    "solver_jpo_action_offset": 1,
+    "state_zero_bit": "most_significant"
+  },
+  "bounds": {
+    "gap": 1.7047972900030572e-07,
+    "lower_objective": 3.7458695880631057,
+    "lower_values": [
+      3.417726410975512,
+      3.680519515266457,
+      3.680519515266457,
+      4.007966285801876,
+      3.680519515266457,
+      4.007966285801876
+    ],
+    "root_gap": 1.7047972860555976e-07,
+    "root_lower_objective": 3.7458695880631057,
+    "root_upper_objective": 3.745869758542834,
+    "upper_objective": 3.7458697585428347,
+    "upper_values": [
+      3.4177265814552413,
+      3.680519685746186,
+      3.680519685746186,
+      4.007966456281605,
+      3.680519685746186,
+      4.007966456281605
+    ]
+  },
+  "initialization": {
+    "initial_beliefs": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "initial_weights": [
+      0.16666666666666666,
+      0.16666666666666666,
+      0.16666666666666666,
+      0.16666666666666666,
+      0.16666666666666666,
+      0.16666666666666666
+    ],
+    "kind": "single synthetic root revealing a uniformly sampled physical state",
+    "root_value_scale": "V_root / gamma, gamma=0.9"
+  },
+  "model": {
+    "beta": 0.05,
+    "epsilon": 0.020000000000000004,
+    "gamma": 0.9,
+    "mdp_density": 0.5,
+    "mdp_seed": 1387219713,
+    "mdp_sha256": "1bdb1256424ca25ff3080108456399cccd0f58856e56d1339b0656473a6a85df",
+    "n_jpo_actions": 128,
+    "n_prescriptions": 64,
+    "n_receiver_actions": 2,
+    "n_states": 6
+  },
+  "runtime": {
+    "julia": "1.12.6",
+    "native_sarsop": "0.1.4",
+    "pomdp_tools": "1.1.0",
+    "pomdps": "1.0.0"
+  },
+  "solver": {
+    "delta": 0.0001,
+    "export_beliefs": false,
+    "initial_bound_max_time": 30.0,
+    "initial_bound_residual": 1e-08,
+    "initial_upper_bound": "fully_observable",
+    "kappa": 0.5,
+    "max_steps": 1000000,
+    "max_time": 600.0,
+    "precision": 0.01,
+    "prune_threshold": 0.1,
+    "search_epsilon": 0.01,
+    "use_binning": true
+  },
+  "training": {
+    "alpha_count": 2,
+    "belief_count": 904,
+    "elapsed_seconds": 0.09906506538391113,
+    "history": [
+      {
+        "elapsed_seconds": 1.0013580322265625e-05,
+        "initial_gap": 113.74586975854288,
+        "initial_lower_objective": -110.00000000000004,
+        "initial_upper_objective": 3.745869758542834,
+        "iteration": 0,
+        "root_gap": 102.3712827826886,
+        "root_lower": -99.00000000000004,
+        "root_upper": 3.3712827826885507
+      },
+      {
+        "elapsed_seconds": 0.00030303001403808594,
+        "initial_gap": 1.7047972860555976e-07,
+        "initial_lower_objective": 3.7458695880631057,
+        "initial_upper_objective": 3.745869758542834,
+        "iteration": 1,
+        "root_gap": 1.5343175574500378e-07,
+        "root_lower": 3.371282629256795,
+        "root_upper": 3.3712827826885507
+      }
+    ],
+    "initial_lower_residual": 8.891757552476065e-09,
+    "initial_lower_subsolution_shift": 4.076231574501322e-09,
+    "initial_upper_bound": "fully_observable",
+    "initial_upper_iterations": 164,
+    "initial_upper_residual": 9.06246233611796e-09,
+    "initialization_seconds": 0.1918020248413086,
+    "iterations": 1,
+    "stop_reason": "precision"
+  }
+}

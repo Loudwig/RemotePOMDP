@@ -20,7 +20,7 @@ from typing import Any
 import numpy as np
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
@@ -39,7 +39,7 @@ from mdp import create_effcom_control_family, select_density
 ROOT = Path(__file__).resolve().parent
 
 EXPERIMENT = {
-    "name": "gap_lower_upper_scheme_1",
+    "name": "gap_lower_upper_scheme_jpo",
     "n_states": 6,
     "n_actions": 2,
     "density": 0.5,
