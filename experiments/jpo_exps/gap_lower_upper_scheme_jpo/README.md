@@ -91,10 +91,17 @@ Note (every policy obtain with sarsop as a lower and upper bound bc when we eval
   
 - `solver_gap_by_run.csv`, `solver_gap_summary.csv`, and
   `solver_gap_summary.json`, reporting the achieved solver precision;
+- `normalized_value_statistics.csv` and `normalized_value_summary.json`,
+  reporting per-seed values normalized at `epsilon = 0.01`, their averages over
+  all seeds, and both trajectories of the maximum-gap seed;
 - `plots/delta_w_mean_trajectories.{png,pdf}`;
-- `plots/positive_delta_w_share.{png,pdf}`.
+- `plots/positive_delta_w_share.{png,pdf}`;
+- `plots/normalized_normal_and_lower_bound_values.{png,pdf}`.
 
 The first paper figure is title-free, uses `epsilon` and `delta W` as its axes,
 and has the English legend entries `Individual trajectories` and `Mean`. The
 second title-free figure reports the percentage of seeds with `delta W > 0`.
-No bootstrap confidence interval is used in these two figures.
+The normalized-value figure averages over every accepted seed. For a
+non-violating point, its lower-bound value is set exactly equal to its normal
+value. Each seed is normalized by its own value at `epsilon = 0.01` before
+averaging. No bootstrap confidence interval is used in these figures.
