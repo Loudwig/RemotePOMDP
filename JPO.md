@@ -1,9 +1,6 @@
 # Infinite-horizon JPO POMDP
 
-This implementation uses the repository's existing `FiniteMDP` as the only
-source of physical transitions and rewards. It does not fit or recreate the
-EffCom MDP. Like EffCom, it delegates infinite-horizon POMDP optimization to
-Julia's `NativeSARSOP` and exports the resulting alpha-vector policy.
+We use Julia's `NativeSARSOP` to do the optimisation of infinite-horizon POMDP optimization and exports the resulting alpha-vector policy.
 
 ## Architecture
 
@@ -16,8 +13,8 @@ The workflow has three deliberately separate stages:
    a Dirac posterior during this stage.
 3. `jpo_policy.py` analyzes the extracted policy. If it finds a transmission
    for which reception and non-reception induce the same next receiver action,
-   it constructs the API-style restricted controller only as post-processing
-   and evaluates its feasible lower bound.
+   it constructs the lower bound controller only as post-processing
+   and evaluates its value.
 
 `jpo.py` orchestrates the stages, while `run_jpo.py` is the command-line entry
 point. Nothing changes `remote_api.py` or the existing MDP implementation.

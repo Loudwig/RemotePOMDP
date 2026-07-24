@@ -10,15 +10,43 @@ from jpo import run_jpo
 from jpo_model import JPOConfig
 from jpo_policy import PolicyAnalysisConfig, PolicyEvaluationConfig
 from jpo_sarsop import NativeSARSOPConfig
-from mdp import create_effcom_control_family, select_density
+from mdp import (
+    FiniteMDP,
+    create_cmab_estimation_family,
+    create_cmab_random_reward_family,
+    create_effcom_control_family,
+    select_density,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--mdp-type",
+        choices=("effcom-control", "cmab-estimation", "cmab-random-reward"),
+        default="effcom-control",
+        help=(
+            "Physical MDP family; CMAB variants have action-independent "
+            "transitions, while only cmab-estimation uses one action per state."
+        ),
+    )
     parser.add_argument("--n-states", type=int, default=4)
-    parser.add_argument("--n-actions", type=int, default=2)
+    parser.add_argument(
+        "--n-actions",
+        type=int,
+        default=2,
+        help=(
+            "Number of classical actions for effcom-control and "
+            "cmab-random-reward; ignored for cmab-estimation."
+        ),
+    )
     parser.add_argument("--density", type=float, default=0.25)
-    parser.add_argument("--reward-decay", type=float, default=10.0)
+    parser.add_argument(
+        "--reward-decay",
+        type=float,
+        default=10.0,
+        help="Next-state reward decay for effcom-control only.",
+    )
     parser.add_argument("--mdp-seed", type=int, default=1234)
     parser.add_argument("--gamma", type=float, default=0.9)
     parser.add_argument("--beta", type=float, default=0.1)
@@ -48,6 +76,30 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_physical_mdp(args: argparse.Namespace) -> FiniteMDP:
+    """Build the CLI-selected physical MDP before applying the JPO transform."""
+
+    if args.mdp_type == "cmab-estimation":
+        family = create_cmab_estimation_family(
+            n_states=args.n_states,
+            seed=args.mdp_seed,
+        )
+    elif args.mdp_type == "cmab-random-reward":
+        family = create_cmab_random_reward_family(
+            n_states=args.n_states,
+            n_actions=args.n_actions,
+            seed=args.mdp_seed,
+        )
+    else:
+        family = create_effcom_control_family(
+            n_states=args.n_states,
+            n_actions=args.n_actions,
+            reward_decay=args.reward_decay,
+            seed=args.mdp_seed,
+        )
+    return select_density(family, args.density)
+
+
 def main() -> None:
     args = build_parser().parse_args()
     output_directory = Path(args.output).expanduser().resolve()
@@ -59,13 +111,7 @@ def main() -> None:
         encoding="utf-8",
     )
     temporary_arguments_path.replace(arguments_path)
-    family = create_effcom_control_family(
-        n_states=args.n_states,
-        n_actions=args.n_actions,
-        reward_decay=args.reward_decay,
-        seed=args.mdp_seed,
-    )
-    mdp = select_density(family, args.density)
+    mdp = build_physical_mdp(args)
     result = run_jpo(
         mdp=mdp,
         model_config=JPOConfig(

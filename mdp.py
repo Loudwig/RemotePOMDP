@@ -152,8 +152,115 @@ def create_effcom_control_family(
     ]
 
 
+def create_cmab_estimation_family(
+    n_states: int = 10,
+    seed: int = 1234,
+) -> list[FiniteMDP]:
+    """Create an action-independent estimation-MDP density family.
+
+    There is one estimation action per physical state.  A correct estimate of
+    the current state earns reward one, independently of the next state.
+    One
+    transition center is sampled per current state and shared by every action
+    and density, so actions never affect the physical dynamics.
+    """
+
+    if n_states < 2 or n_states % 2 != 0:
+        raise ValueError(
+            "The CMAB family requires a positive even number of states"
+        )
+
+    # Match the EffCom generator's reproducible random-number convention.
+    rng = np.random.RandomState(seed)
+    centers = rng.randint(0, n_states, size=n_states)
+    number_of_mdps = n_states // 2
+    common_transitions = [
+        np.zeros((n_states, n_states)) for _ in range(number_of_mdps)
+    ]
+
+    for state, center in enumerate(centers):
+        common_transitions[0][state, center] = 1.0
+        for family_index in range(1, number_of_mdps):
+            support_size = 2 * family_index + 1
+            for offset in range(-family_index, family_index + 1):
+                next_state = (int(center) + offset) % n_states
+                common_transitions[family_index][state, next_state] = (
+                    0.5 - abs(offset) / support_size
+                )
+            common_transitions[family_index][state, center] += 0.1
+            common_transitions[family_index][state] /= common_transitions[
+                family_index
+            ][state].sum()
+
+    # FiniteMDP keeps an action axis even though the physical kernel is common.
+    transitions = [
+        np.broadcast_to(kernel, (n_states, n_states, n_states)).copy()
+        for kernel in common_transitions
+    ]
+    rewards = np.broadcast_to(
+        np.eye(n_states, dtype=float)[:, :, None],
+        (n_states, n_states, n_states),
+    ).copy()
+
+    return [
+        FiniteMDP(
+            P=transition,
+            R=rewards,
+            density=(2 * family_index + 1) / n_states,
+            seed=seed,
+        )
+        for family_index, transition in enumerate(transitions)
+    ]
+
+
+def create_cmab_random_reward_family(
+    n_states: int = 10,
+    n_actions: int = 2,
+    seed: int = 1234,
+) -> list[FiniteMDP]:
+    """Create a CMAB family with random state-action rewards.
+
+    Actions are classical control actions rather than state estimates. They
+    all share the same physical transition kernel, whose centers and density
+    construction match :func:`create_cmab_estimation_family`. Each current
+    state/action pair receives one uniform random reward in ``[0, 1]``. That
+    reward is independent of the next state and is shared by every density
+    member.
+    """
+
+    if n_actions < 1:
+        raise ValueError("n_actions must be positive")
+
+    transition_template_family = create_cmab_estimation_family(
+        n_states=n_states,
+        seed=seed,
+    )
+
+    # Continue the CMAB generator's random stream after sampling its centers.
+    rng = np.random.RandomState(seed)
+    rng.randint(0, n_states, size=n_states)
+    state_action_rewards = rng.random_sample((n_actions, n_states))
+    rewards = np.broadcast_to(
+        state_action_rewards[:, :, None],
+        (n_actions, n_states, n_states),
+    ).copy()
+
+    return [
+        FiniteMDP(
+            P=np.broadcast_to(
+                mdp.P[:1],
+                (n_actions, n_states, n_states),
+            ).copy(),
+            R=rewards,
+            density=mdp.density,
+            seed=seed,
+        )
+        for mdp in transition_template_family
+    ]
+
+
 def select_density(family: list[FiniteMDP], density: float) -> FiniteMDP:
-    """Select one member of an EffCom family by density."""
+    """Select one member of an MDP family by density."""
 
     for mdp in family:
         if mdp.density is not None and np.isclose(mdp.density, density, atol=1e-12, rtol=0.0):
