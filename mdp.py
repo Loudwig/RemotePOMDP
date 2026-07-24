@@ -1,4 +1,4 @@
-"""Finite control MDPs used by the remote-control simulations."""
+"""Finite MDP families used by the JPO simulations."""
 
 from __future__ import annotations
 
@@ -62,33 +62,6 @@ class FiniteMDP:
         """Return E[r(s, a, s_next)] with shape (A, S)."""
 
         return np.sum(self.P * self.R, axis=2)
-
-
-def initial_distribution(n_states: int, initial_state: int | None = None) -> np.ndarray:
-    """Return uniform ``mu0`` or a point mass for debugging."""
-
-    if n_states < 1:
-        raise ValueError("n_states must be positive")
-    if initial_state is None:
-        return np.full(n_states, 1.0 / n_states)
-    if not 0 <= initial_state < n_states:
-        raise ValueError(f"initial_state must be in [0, {n_states})")
-    mu0 = np.zeros(n_states)
-    mu0[initial_state] = 1.0
-    return mu0
-
-
-def validate_initial_distribution(mu0: np.ndarray, n_states: int) -> np.ndarray:
-    """Validate and return a private floating-point copy of ``mu0``."""
-
-    out = np.asarray(mu0, dtype=float)
-    if out.shape != (n_states,):
-        raise ValueError(f"mu0 must have shape ({n_states},), got {out.shape}")
-    if not np.all(np.isfinite(out)) or np.any(out < 0.0):
-        raise ValueError("mu0 must be finite and nonnegative")
-    if not np.isclose(out.sum(), 1.0, atol=1e-12, rtol=1e-12):
-        raise ValueError("mu0 must sum to one")
-    return np.array(out, dtype=float, copy=True)
 
 
 def create_effcom_control_family(

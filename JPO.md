@@ -17,7 +17,7 @@ The workflow has three deliberately separate stages:
    and evaluates its value.
 
 `jpo.py` orchestrates the stages, while `run_jpo.py` is the command-line entry
-point. Nothing changes `remote_api.py` or the existing MDP implementation.
+point.
 
 ## JPO model
 
@@ -117,9 +117,7 @@ whose internal belief can intentionally differ from the physical posterior.
 The requested tail interval is enforced; an insufficient horizon/node cap
 raises an error instead of silently returning an uncertified number.
 
-Monte Carlo simulation is optional and is recorded only as validation. The
-existing finite-state API policy can likewise be evaluated without Monte Carlo
-by its Bellman policy-evaluation routine.
+Monte Carlo simulation is optional and is recorded only as validation.
 
 ## Installation and execution
 
